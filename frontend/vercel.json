@@ -1,5 +1,8 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://trading-analyzer-backend.vercel.app/api/:path*" }
+    {
+      "source": "/api/:path*",
+      "destination": "https://intra-day.vercel.app/api/:path*"
+    }
   ]
 }

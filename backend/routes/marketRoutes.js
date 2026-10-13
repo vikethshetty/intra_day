@@ -5,6 +5,7 @@ const router = Router();
 
 router.get('/health', c.health);
 router.get('/search', c.search);
+router.get('/scanner/top10', c.dailyTop10);
 
 // Market data
 router.get('/market/:symbol', c.marketOverview);

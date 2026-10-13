@@ -9,6 +9,7 @@ import {
 } from '../services/signalEngine.js';
 import { generateScenarioAnalysis } from '../services/predictionEngine.js';
 import { buildIntradayCall } from '../services/intradayService.js';
+import { getDailyTop10 } from '../services/dailyScannerService.js';
 
 const DISCLAIMER = 'Technical-analysis estimates for personal study only. Not financial advice. Probabilities are not guarantees; markets can move against any setup. This app never places trades.';
 const TAIL = 6;
@@ -168,6 +169,10 @@ export const health = (req, res) => {
 export const search = wrap(async (req, res) => {
   const out = await searchSymbols(String(req.query.q || ''));
   res.json({ ok: true, ...out });
+});
+
+export const dailyTop10 = wrap(async (req, res) => {
+  res.json(await getDailyTop10());
 });
 
 export const marketOverview = wrap(async (req, res) => {

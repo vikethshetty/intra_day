@@ -169,7 +169,143 @@ const twelvedata = {
   },
 };
 
-const PROVIDERS = { yahoo, twelvedata };
+/**
+ * Upstox's Analytics Token is a read-only bearer token. Candle REST endpoints
+ * provide frequently refreshed candles; tick-by-tick updates need the separate
+ * Upstox WebSocket feed, which this polling-based app does not currently use.
+ */
+const UPSTOX_INTERVALS = {
+  '1m': ['minutes', 1, 5],
+  '3m': ['minutes', 3, 5],
+  '5m': ['minutes', 5, 30],
+  '15m': ['minutes', 15, 30],
+  '30m': ['minutes', 30, 90],
+  '1H': ['hours', 1, 90],
+  '1D': ['days', 1, 730],
+};
+const upstoxInstrumentCache = new Map();
+
+function upstoxToken() {
+  return process.env.UPSTOX_ACCESS_TOKEN || process.env.MARKET_DATA_API_KEY;
+}
+
+function istDate(daysAgo = 0) {
+  const date = new Date(Date.now() + IST_OFFSET * 1000);
+  date.setUTCDate(date.getUTCDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
+
+function asUpstoxCandle(row) {
+  const candle = {
+    time: Math.floor(Date.parse(row[0]) / 1000),
+    open: Number(row[1]), high: Number(row[2]), low: Number(row[3]),
+    close: Number(row[4]), volume: Number(row[5]) || 0,
+  };
+  return Number.isFinite(candle.time) && [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)
+    ? candle : null;
+}
+
+const upstox = {
+  id: 'upstox',
+  label: 'Upstox',
+  requiresKey: true,
+  tokenEnv: 'UPSTOX_ACCESS_TOKEN',
+  nativeIntervals: new Set(Object.keys(UPSTOX_INTERVALS)),
+
+  async request(path, params = {}) {
+    const token = upstoxToken();
+    if (!token) throw new MarketDataError('MISSING_API_KEY', 'Upstox needs an Analytics Token. Set UPSTOX_ACCESS_TOKEN in backend/.env.', 503);
+    try {
+      const { data } = await axios.get(`https://api.upstox.com${path}`, {
+        params,
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        timeout: 10000,
+      });
+      if (data?.status && data.status !== 'success') {
+        throw new MarketDataError('API_FAILURE', data.errors?.[0]?.message || 'Upstox returned an unsuccessful response.', 502);
+      }
+      return data;
+    } catch (err) {
+      throw mapHttpError(err, 'Upstox');
+    }
+  },
+
+  async resolveInstrument(base, suffix) {
+    const exchange = suffix === 'BO' ? 'BSE' : 'NSE';
+    const cacheKey = `${exchange}:${base}`;
+    if (upstoxInstrumentCache.has(cacheKey)) return upstoxInstrumentCache.get(cacheKey);
+    const data = await this.request('/v2/instruments/search', {
+      query: base, exchanges: exchange, segments: 'EQ', records: 30,
+    });
+    const items = data?.data || [];
+    const wanted = base.replace(/[^A-Z0-9]/g, '');
+    const match = items.find((item) => (item.trading_symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === wanted)
+      || items.find((item) => item.instrument_type === 'EQ' && (item.trading_symbol || '').toUpperCase() === base.toUpperCase());
+    if (!match?.instrument_key) throw new MarketDataError('INVALID_SYMBOL', `${base} was not found as an ${exchange} equity on Upstox.`, 404);
+    const instrument = { key: match.instrument_key, name: match.name || match.trading_symbol, exchange };
+    upstoxInstrumentCache.set(cacheKey, instrument);
+    return instrument;
+  },
+
+  async fetchCandles({ base, suffix, interval }) {
+    const instrument = await this.resolveInstrument(base, suffix);
+    const [unit, size, lookbackDays] = UPSTOX_INTERVALS[interval];
+    const key = encodeURIComponent(instrument.key);
+    const toDate = istDate();
+    const fromDate = istDate(lookbackDays);
+    const history = await this.request(
+      `/v3/historical-candle/${key}/${unit}/${size}/${toDate}/${fromDate}`,
+    );
+    let rows = history?.data?.candles || [];
+
+    // The intraday endpoint contains the current session's forming/latest bars.
+    // Merge it over history so duplicate timestamps use the most recent version.
+    if (interval !== '1D') {
+      try {
+        const live = await this.request(`/v3/historical-candle/intraday/${key}/${unit}/${size}`);
+        const byTime = new Map(rows.map((row) => [row[0], row]));
+        for (const row of live?.data?.candles || []) byTime.set(row[0], row);
+        rows = [...byTime.values()];
+      } catch (err) {
+        // Historical candles remain useful outside the live session or if this
+        // optional current-session request is temporarily unavailable.
+        if (!rows.length) throw err;
+      }
+    }
+
+    const candles = rows.map(asUpstoxCandle).filter(Boolean);
+    return {
+      candles,
+      providerSymbol: instrument.key,
+      meta: {
+        name: instrument.name || base,
+        currency: 'INR',
+        exchange: instrument.exchange,
+        previousClose: null,
+        regularMarketPrice: null,
+        regularMarketTime: null,
+      },
+    };
+  },
+
+  async search(q) {
+    try {
+      const data = await this.request('/v2/instruments/search', {
+        query: q.trim(), exchanges: 'NSE,BSE', segments: 'EQ', records: 30,
+      });
+      return (data?.data || []).filter((item) => item.instrument_type === 'EQ' && item.trading_symbol)
+        .map((item) => ({
+          symbol: item.trading_symbol,
+          name: item.name || item.trading_symbol,
+          exchange: String(item.exchange || item.instrument_key || '').startsWith('BSE') ? 'BSE' : 'NSE',
+        }));
+    } catch {
+      return null;
+    }
+  },
+};
+
+const PROVIDERS = { yahoo, twelvedata, upstox };
 
 export function getProviderStatus() {
   const id = (process.env.MARKET_DATA_PROVIDER || 'yahoo').trim().toLowerCase();
@@ -177,8 +313,9 @@ export function getProviderStatus() {
   if (!p) {
     return { configured: false, id, label: 'Not configured', message: `MARKET_DATA_PROVIDER="${process.env.MARKET_DATA_PROVIDER}" is not a supported provider. Use one of: ${Object.keys(PROVIDERS).join(', ')} in backend/.env.` };
   }
-  if (p.requiresKey && !process.env.MARKET_DATA_API_KEY) {
-    return { configured: false, id, label: p.label, message: `${p.label} needs your own API key. Add MARKET_DATA_API_KEY to backend/.env and restart the backend.` };
+  const credentialName = p.tokenEnv || 'MARKET_DATA_API_KEY';
+  if (p.requiresKey && !(p.tokenEnv ? upstoxToken() : process.env.MARKET_DATA_API_KEY)) {
+    return { configured: false, id, label: p.label, message: `${p.label} needs your own API key/token. Add ${credentialName} to backend/.env and restart the backend.` };
   }
   return { configured: true, id, label: p.label, message: null };
 }
@@ -235,7 +372,7 @@ export async function getCandles(symbolInput, intervalInput = '1m') {
   const job = (async () => {
     const raw = await provider.fetchCandles({ base: sym.base, suffix: sym.suffix, interval });
     let candles = raw.candles.sort((a, b) => a.time - b.time).filter((c, i, arr) => i === arr.length - 1 || arr[i + 1].time !== c.time);
-    if (cfg.agg > 1) candles = aggregateCandles(candles, cfg.agg);
+    if (cfg.agg > 1 && !provider.nativeIntervals?.has(interval)) candles = aggregateCandles(candles, cfg.agg);
     if (!candles.length) throw new MarketDataError('NO_DATA', 'The provider returned no candles for this symbol/timeframe.', 404);
     // The provider's live quote can be fresher than its candle series. If the quote time falls inside the
     // forming candle, fold that real price into it (close/high/low). If the quote is already past the candle

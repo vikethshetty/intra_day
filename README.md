@@ -35,21 +35,22 @@ npm install
 
 ## Configuration
 
-Create `backend/.env` (copy `backend/.env.example`):
+Create `backend/.env` (copy `backend/.env.example`), then add your Upstox Analytics Token:
 
 ```
 PORT=5000
 FRONTEND_URL=http://localhost:5173
-MARKET_DATA_PROVIDER=yahoo
-MARKET_DATA_API_KEY=
+MARKET_DATA_PROVIDER=upstox
+UPSTOX_ACCESS_TOKEN=your_upstox_analytics_token
 ```
 
 | Variable | Meaning |
 |---|---|
 | `PORT` | Backend port (default 5000) |
 | `FRONTEND_URL` | Allowed browser origin (localhost on any port is always allowed) |
-| `MARKET_DATA_PROVIDER` | `yahoo` (default, no key) or `twelvedata` (needs your own key) |
-| `MARKET_DATA_API_KEY` | Only for providers that need one. **You must obtain your own legitimate key from the provider.** |
+| `MARKET_DATA_PROVIDER` | `upstox`, `yahoo`, or `twelvedata`. Choose `upstox` to use Upstox data. |
+| `UPSTOX_ACCESS_TOKEN` | Your Upstox Analytics Token. Keep it secret; it is read-only and expires after one year. |
+| `MARKET_DATA_API_KEY` | Existing Twelve Data key variable. Upstox also accepts this as a fallback, but `UPSTOX_ACCESS_TOKEN` is preferred. |
 
 If the provider is unknown (for example the placeholder `YOUR_PROVIDER`) or a required key is missing, the backend still starts and the dashboard shows a clear *"Market-data provider needs configuration"* message instead of crashing.
 
@@ -83,17 +84,18 @@ Optional: `npm run build` in `frontend/` produces a static build; `npm test` in 
 
 Everything that talks to a data vendor lives in **`backend/services/marketDataService.js`**. Each provider is a small object with `fetchCandles()` returning `{ candles: [{time, open, high, low, close, volume}], meta }`; the rest of the app only sees that normalised shape.
 
-* **`yahoo` (default)** - Yahoo Finance's public chart endpoint: OHLCV, timestamps, 1-minute candles for NSE (`.NS`) with a BSE (`.BO`) fallback. No key. It is an *unofficial* endpoint intended for personal use: it may be delayed (typically up to ~1 minute during market hours), rate-limited, or change without notice. Respect Yahoo's terms; do not use it commercially.
+* **`upstox`** - Upstox's documented V3 historical and current-session candle APIs, plus its instrument search endpoint. Set `MARKET_DATA_PROVIDER=upstox` and `UPSTOX_ACCESS_TOKEN`. Upstox's Analytics Token is free and read-only. The app polls candle endpoints; it does not yet connect to Upstox's WebSocket feed, so this is not tick-by-tick streaming.
+* **`yahoo` (default if no provider is configured)** - Yahoo Finance's public chart endpoint: OHLCV, timestamps, 1-minute candles for NSE (`.NS`) with a BSE (`.BO`) fallback. No key. It is an *unofficial* endpoint intended for personal use: it may be delayed, rate-limited, or change without notice. Respect Yahoo's terms; do not use it commercially.
 * **`twelvedata`** - adapter included; requires your own API key and a plan that covers NSE. It was written to the vendor's documented format but has not been run against a live key here.
 * **Google Finance** - **not used.** It has no public real-time API and its terms/anti-bot protections do not permit scraping, and this project deliberately does not try to bypass them.
-* **Adding another provider:** add an entry to `PROVIDERS` in `marketDataService.js`, set `MARKET_DATA_PROVIDER` to its id, and put any key in `MARKET_DATA_API_KEY`.
+* **Provider selection:** add the chosen provider id and its required secret in `backend/.env`. In Vercel, configure the same variables under the backend service's Environment Variables and redeploy. Local `.env` files are ignored by Git, so changing one does not update Vercel.
 
 ## How live candles work
 
 1. On load (and when you change stock/timeframe) the frontend requests the full history once: `GET /api/analysis/:symbol?interval=1m`.
 2. After that it **polls** a small "tail" (the last ~6 candles and indicator points): every ~4 s for 1m-5m, 10-15 s for higher timeframes, ~45 s when the market is closed or the tab is hidden. The backend caches provider responses for a few seconds so many polls never hammer the vendor.
 3. The tail is merged into the in-memory series and only the **latest candle is updated** on the chart (`series.update`) - no page reload, no full redraw. If a gap is detected (e.g. the laptop slept) it reloads the history.
-4. WebSocket is not used because the default provider does not offer a supported public stream; the app uses controlled polling instead. Data is therefore "near-live", not tick-by-tick.
+4. This app uses controlled polling of candle endpoints. With Upstox, the current-session candle endpoint supplies refreshed candles, but the app does not yet use the Upstox WebSocket feed; updates are near-live and not tick-by-tick.
 5. 3-minute candles are aggregated from real 1-minute candles (anchored to 09:15 IST). Times are shown in IST. Session VWAP resets each IST trading day.
 6. Market hours (IST): pre-open 09:00-09:15, open 09:15-15:30, after-market afterwards; weekends are closed. The exchange holiday calendar is not available offline, so if no fresh candle arrives for 5 minutes during "open" hours the UI says the feed looks stale (possible holiday/delay) rather than pretending it is live. When closed, the last available candle is shown.
 
@@ -123,6 +125,7 @@ The levels are then drawn on the chart as ENTRY, STOP LOSS, TARGET 1/2 (plus sup
 |---|---|---|
 | GET | `/api/health` | provider configuration status |
 | GET | `/api/search?q=` | symbol suggestions |
+| GET | `/api/scanner/top10` | daily ranking of the ten highest setup-confidence shares in the built-in NSE scan list |
 | GET | `/api/market/:symbol` | overview + quote + market status |
 | GET | `/api/market/:symbol/candles?interval=1m` | `1m 3m 5m 15m 30m 1H 1D` |
 | GET | `/api/market/:symbol/quote` | price, change, day high/low, volume |
@@ -142,7 +145,7 @@ live-trading-analyzer/
 │   ├── app.js, server.js
 │   ├── controllers/marketController.js
 │   ├── routes/marketRoutes.js
-│   ├── services/ marketDataService · technicalAnalysisService · candleAnalysisService · signalEngine · predictionEngine
+│   ├── services/ marketDataService · dailyScannerService · technicalAnalysisService · candleAnalysisService · signalEngine · predictionEngine
 │   ├── utils/ indicators.js (RSI, EMA, SMA, MACD, VWAP, ATR, ADX, Bollinger, swings) · symbols.js
 │   └── test/smoke.test.js   (runs against a local mock feed; synthetic candles exist only in this test)
 ├── frontend/ (Vite + React: pages/, components/, hooks/, services/, styles/)
@@ -151,7 +154,8 @@ live-trading-analyzer/
 
 ## Limitations
 
-* Free data is delayed/unofficial, can be rate-limited, may lack volume on some symbols, and is polled rather than streamed.
+* Data availability and update timing depend on the selected provider. Upstox's REST candles are polled rather than streamed here; the Upstox WebSocket feed is not integrated yet.
+* The Daily Top 10 ranks a built-in list of 28 NSE symbols using the latest available 5-minute candles. It is not a scan of every listed stock and does not run as a background job; it refreshes when opened and periodically while the page is open.
 * Technical indicators describe the past; patterns fail often. Backtests ignore costs, slippage and gaps, and a high historical win rate does not predict future results.
 * Probabilities are tendencies over roughly the next 10 candles, never a price target and never a time.
 * Exchange holidays, circuit limits, corporate actions, news and fundamentals are not modelled.

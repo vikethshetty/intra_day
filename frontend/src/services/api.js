@@ -20,4 +20,5 @@ export const runPrediction = (symbol, interval) =>
   http.post(`/analysis/${enc(symbol)}/prediction`, { interval }).then((r) => r.data);
 export const searchSymbols = (q) => http.get('/search', { params: { q } }).then((r) => r.data);
 export const fetchHealth = () => http.get('/health').then((r) => r.data);
-export const fetchDailyTop10 = () => http.get('/scanner/top10', { timeout: 30000 }).then((r) => r.data);
+export const fetchDailyTop10Batch = (offset = 0) =>
+  http.get('/scanner/top10', { params: { offset }, timeout: 45000 }).then((r) => r.data);

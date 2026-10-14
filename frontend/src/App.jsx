@@ -5,7 +5,7 @@ import DailyTop10 from './pages/DailyTop10.jsx';
 
 const TABS = [
   { id: 'intraday', label: 'Intraday today', icon: 'bi-lightning-charge-fill', hint: 'One session: BUY NOW / SELL NOW / WAIT' },
-  { id: 'daily', label: 'Daily Top 10', icon: 'bi-trophy-fill', hint: 'Highest technical setup confidence in the scan list' },
+  { id: 'daily', label: 'Daily Top 10', icon: 'bi-trophy-fill', hint: 'Highest setup confidence across NSE-listed shares' },
   { id: 'full', label: 'Full analysis', icon: 'bi-graph-up-arrow', hint: 'All timeframes, indicators, scenarios, backtest' },
 ];
 

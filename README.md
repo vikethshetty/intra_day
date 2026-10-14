@@ -125,7 +125,7 @@ The levels are then drawn on the chart as ENTRY, STOP LOSS, TARGET 1/2 (plus sup
 |---|---|---|
 | GET | `/api/health` | provider configuration status |
 | GET | `/api/search?q=` | symbol suggestions |
-| GET | `/api/scanner/top10` | daily ranking of the ten highest setup-confidence shares in the built-in NSE scan list |
+| GET | `/api/scanner/top10?offset=0` | one batch from the NSE equity scan; the browser advances `offset` until `done: true` |
 | GET | `/api/market/:symbol` | overview + quote + market status |
 | GET | `/api/market/:symbol/candles?interval=1m` | `1m 3m 5m 15m 30m 1H 1D` |
 | GET | `/api/market/:symbol/quote` | price, change, day high/low, volume |
@@ -155,7 +155,7 @@ live-trading-analyzer/
 ## Limitations
 
 * Data availability and update timing depend on the selected provider. Upstox's REST candles are polled rather than streamed here; the Upstox WebSocket feed is not integrated yet.
-* The Daily Top 10 ranks a built-in list of 28 NSE symbols using the latest available 5-minute candles. It is not a scan of every listed stock and does not run as a background job; it refreshes when opened and periodically while the page is open.
+* Daily Top 10 processes the current NSE mainboard and SME equity lists in small batches using the selected provider's 5-minute candles. It ranks all symbols for which the provider returns enough candles; unavailable or incomplete symbols are counted as skipped. The browser saves progress locally and resumes an interrupted scan. A provider timeout or rate limit pauses the scan instead of silently producing a partial top ten.
 * Technical indicators describe the past; patterns fail often. Backtests ignore costs, slippage and gaps, and a high historical win rate does not predict future results.
 * Probabilities are tendencies over roughly the next 10 candles, never a price target and never a time.
 * Exchange holidays, circuit limits, corporate actions, news and fundamentals are not modelled.

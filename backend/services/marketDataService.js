@@ -105,6 +105,7 @@ const yahoo = {
             regularMarketTime: m.regularMarketTime ?? null,
             fiftyTwoWeekHigh: m.fiftyTwoWeekHigh ?? null,
             fiftyTwoWeekLow: m.fiftyTwoWeekLow ?? null,
+            instrumentType: m.instrumentType || null,
           },
         };
       } catch (err) {

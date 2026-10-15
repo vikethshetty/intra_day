@@ -316,6 +316,11 @@ code { background: rgba(30, 60, 120, 0.08); padding: 1px 5px; border-radius: 5px
 .toast-x i.bi { font-size: 18px; } .toast-x.bull i.bi:first-child { color: var(--bull); } .toast-x.bear i.bi:first-child { color: var(--bear); } .toast-x.warn i.bi:first-child { color: var(--warn); }
 .toast-x div { display: flex; flex-direction: column; font-size: 13px; } .toast-x div span { color: var(--muted); }
 .toast-x button { border: 0; background: transparent; color: var(--faint); cursor: pointer; }
+.live-data-notice { position: fixed; z-index: 101; right: 16px; bottom: 16px; display: grid; grid-template-columns: 24px 1fr 24px; gap: 10px; align-items: center; width: min(390px, calc(100vw - 32px)); padding: 13px 15px; border: 1px solid var(--line); border-left: 4px solid var(--bull); border-radius: 12px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 14px 34px -12px rgba(20, 40, 90, 0.4); animation: slide 0.25s ease-out; }
+.live-data-notice > i { color: var(--bull); font-size: 19px; }
+.live-data-notice span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.live-data-notice small { color: var(--muted); }
+.live-data-notice button { border: 0; background: transparent; color: var(--faint); cursor: pointer; }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .disclaimer { display: flex; gap: 12px; padding: 14px 18px; border-radius: var(--r); background: rgba(14, 26, 43, 0.92); color: #cfd8e6; font-size: 12.5px; }
 .disclaimer i { font-size: 20px; color: #f5b04c; } .disclaimer p { margin: 0; } .disclaimer b { color: #fff; }

@@ -12,6 +12,7 @@ import CandleStructurePanel from '../components/CandleStructurePanel.jsx';
 import BacktestPanel from '../components/BacktestPanel.jsx';
 import TradeHistory from '../components/TradeHistory.jsx';
 import AlertToasts from '../components/AlertToasts.jsx';
+import LiveDataNotice from '../components/LiveDataNotice.jsx';
 import MarketStatus, { DataBanner } from '../components/MarketStatus.jsx';
 import { useMarketData } from '../hooks/useMarketData.js';
 import { useAlerts } from '../hooks/useAlerts.js';
@@ -167,6 +168,7 @@ export default function TradingDashboard() {
         </footer>
       </main>
       <AlertToasts toasts={toasts} onDismiss={dismissToast} />
+      <LiveDataNotice source={data?.chartSource} />
     </div>
   );
 }

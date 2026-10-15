@@ -14,6 +14,7 @@ router.get('/scanner/top10/backtest', c.dailyTop10Backtest);
 router.get('/market/:symbol', c.marketOverview);
 router.get('/market/:symbol/candles', c.marketCandles);
 router.get('/market/:symbol/quote', c.marketQuote);
+router.get('/live/:symbol', c.liveMarket);
 router.get('/tracking/:symbol', c.trackingMarket);
 
 // Analysis

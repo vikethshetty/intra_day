@@ -1,5 +1,5 @@
 import {
-  MarketDataError, getCandles, getQuote, buildQuote, getMarketStatus, getProviderStatus, normalizeInterval, searchSymbols, INTERVALS,
+  MarketDataError, getCandles, getQuote, getLiveQuote, buildQuote, getMarketStatus, getProviderStatus, normalizeInterval, searchSymbols, INTERVALS,
 } from '../services/marketDataService.js';
 import {
   buildContext, buildSnapshot, describeIndicators, detectEvents,
@@ -25,7 +25,7 @@ const wrap = (fn) => async (req, res) => {
     const e = err instanceof MarketDataError ? err : new MarketDataError('INTERNAL', 'Unexpected analysis error. Check the backend console.', 500);
     if (!(err instanceof MarketDataError)) console.error(err);
     if (e.retryAfter) res.set('Retry-After', String(e.retryAfter));
-    const providerId = req.path.startsWith('/tracking/') ? 'upstox' : 'yahoo';
+    const providerId = req.path.startsWith('/tracking/') || req.path.startsWith('/live/') ? 'upstox' : 'yahoo';
     res.status(e.status || 500).json({ ok: false, error: { code: e.code, message: e.message, retryAfter: e.retryAfter ?? null }, provider: getProviderStatus(providerId) });
   }
 };
@@ -224,7 +224,47 @@ export const marketCandles = wrap(async (req, res) => {
   res.json({ ok: true, ...header(data), count: limit, candles: data.candles.slice(-limit) });
 });
 
-/** Upstox is fetched only by the active trade tracker; analysis data remains Yahoo-based. */
+/** Upstox supplies the searched stock's quote/chart; the analysis endpoint stays Yahoo-based. */
+export const liveMarket = wrap(async (req, res) => {
+  const interval = normalizeInterval(req.query.interval || '1m');
+  const mode = ['full', 'tail'].includes(req.query.series) ? req.query.series : 'full';
+  const [data, quoteData] = await Promise.all([
+    getCandles(req.params.symbol, interval, 'upstox'),
+    interval === '1m' ? Promise.resolve(null) : getCandles(req.params.symbol, '1m', 'upstox'),
+  ]);
+  const chartCandles = data.candles.map((candle) => ({ ...candle }));
+  const quoteCandles = quoteData?.candles || data.candles;
+  const quote = buildQuote(quoteCandles, quoteData?.meta || data.meta);
+  const ltp = await getLiveQuote(req.params.symbol);
+  quote.price = ltp.price;
+  quote.high = Math.max(quote.high, ltp.price);
+  quote.low = Math.min(quote.low, ltp.price);
+  quote.previousClose = ltp.previousClose ?? quote.previousClose;
+  quote.change = quote.previousClose != null ? quote.price - quote.previousClose : null;
+  quote.changePct = quote.change != null && quote.previousClose ? (quote.change / quote.previousClose) * 100 : null;
+  quote.volume = ltp.volume || quote.volume;
+  quote.time = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000);
+  const marketStatus = getMarketStatus(Date.now(), quote.lastCandleTime);
+  const last = chartCandles[chartCandles.length - 1];
+  if (marketStatus.isOpen && last && now >= last.time && now < last.time + INTERVALS[interval].seconds) {
+    last.close = ltp.price;
+    last.high = Math.max(last.high, ltp.price);
+    last.low = Math.min(last.low, ltp.price);
+  }
+  const ctx = buildContext(chartCandles, interval);
+  const candles = mode === 'tail' ? chartCandles.slice(-TAIL) : chartCandles;
+  const series = buildSeries(ctx, mode);
+  res.json({
+    ok: true, ...header(data), interval, mode,
+    quote,
+    marketStatus,
+    candles, series,
+    provider: getProviderStatus('upstox'),
+  });
+});
+
+/** Trade tracking shares the Upstox feed; technical analysis remains Yahoo-based. */
 export const trackingMarket = wrap(async (req, res) => {
   const interval = normalizeInterval(req.query.interval || '1m');
   const data = await getCandles(req.params.symbol, interval, 'upstox');

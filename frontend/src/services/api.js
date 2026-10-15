@@ -30,3 +30,5 @@ export const fetchDailyTop10BacktestBatch = (symbols, offset, periodDays, endTim
   http.get('/scanner/top10/backtest', { params: { symbols: symbols.join(','), offset, periodDays, endTime }, timeout: 55000 }).then((r) => r.data);
 export const fetchTrackingData = (symbol, interval) =>
   http.get(`/tracking/${enc(symbol)}`, { params: { interval }, timeout: 15000 }).then((r) => r.data);
+export const fetchLiveMarket = (symbol, interval, series = 'full') =>
+  http.get(`/live/${enc(symbol)}`, { params: { interval, series }, timeout: 20000 }).then((r) => r.data);

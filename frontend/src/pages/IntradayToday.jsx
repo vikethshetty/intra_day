@@ -132,7 +132,7 @@ export default function IntradayToday() {
 
         <footer className="disclaimer">
           <i className="bi bi-shield-exclamation" />
-          <p><b>Not financial advice.</b> BUY NOW / SELL NOW are rule-based signals calculated from Yahoo Finance candles. When you track a trade, Upstox candles monitor price against the fixed entry, stop, and target levels. Data feeds can differ; confirm orders with your broker. This app never places trades.</p>
+          <p><b>Not financial advice.</b> The live quote and chart use Upstox; BUY NOW / SELL NOW analysis and historical context use Yahoo Finance. When you track a trade, Upstox monitors price against the fixed entry, stop, and target levels. Data feeds can differ; confirm orders with your broker. This app never places trades.</p>
         </footer>
       </main>
       <AlertToasts toasts={toasts} onDismiss={dismissToast} />

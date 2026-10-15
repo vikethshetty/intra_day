@@ -266,6 +266,22 @@ const upstox = {
     return instrument;
   },
 
+  async fetchLtp({ base, suffix }) {
+    const instrument = await this.resolveInstrument(base, suffix);
+    const response = await this.request('/v3/market-quote/ltp', { instrument_key: instrument.key });
+    const quotes = Object.values(response?.data || {});
+    const quote = quotes.find((item) => item.instrument_token === instrument.key) || quotes[0];
+    if (!(Number(quote?.last_price) > 0)) {
+      throw new MarketDataError('NO_DATA', 'Upstox did not return a last traded price for this instrument.', 404);
+    }
+    const previousClose = quote.cp == null ? null : Number(quote.cp);
+    return {
+      price: Number(quote.last_price),
+      previousClose: Number.isFinite(previousClose) && previousClose > 0 ? previousClose : null,
+      volume: Number(quote.volume) || 0,
+    };
+  },
+
   async fetchCandles({ base, suffix, interval }) {
     const instrument = await this.resolveInstrument(base, suffix);
     const [unit, size, lookbackDays] = UPSTOX_INTERVALS[interval];
@@ -487,6 +503,14 @@ export function buildQuote(candles, meta = {}) {
 export async function getQuote(symbolInput, providerId = null) {
   const d = await getCandles(symbolInput, '1m', providerId);
   return { quote: buildQuote(d.candles, d.meta), data: d };
+}
+
+export async function getLiveQuote(symbolInput) {
+  const sym = normalizeSymbol(symbolInput);
+  if (!sym) throw new MarketDataError('INVALID_SYMBOL', 'Invalid symbol. Use letters/numbers, e.g. HEROMOTOCO, RELIANCE, TCS.', 400);
+  const provider = activeProvider('upstox');
+  if (!provider.fetchLtp) throw new MarketDataError('API_FAILURE', 'The selected provider does not support live last-traded prices.', 502);
+  return provider.fetchLtp({ base: sym.base, suffix: sym.suffix });
 }
 
 export async function searchSymbols(q, providerId = null) {

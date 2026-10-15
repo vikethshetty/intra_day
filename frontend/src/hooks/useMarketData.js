@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchAnalysis, normalizeError } from '../services/api.js';
+import { fetchAnalysis, fetchLiveMarket, normalizeError } from '../services/api.js';
 
 /** Merge the last few candles/points from a "tail" response into the full buffers (no page reload, no refetch of history). */
 function mergeTail(buf, res) {
@@ -17,7 +17,9 @@ function mergeTail(buf, res) {
 function pollDelay(res) {
   if (typeof document !== 'undefined' && document.hidden) return 30000;
   if (!res.marketStatus?.isOpen) return 45000;
-  return { '1m': 4000, '3m': 4000, '5m': 5000, '15m': 10000, '30m': 10000, '1H': 15000, '1D': 30000 }[res.interval] ?? 8000;
+  // Upstox is polled for the live quote/chart. A 15-second cadence keeps the
+  // REST feed responsive without spending the account's request allowance too fast.
+  return 15000;
 }
 
 /**
@@ -45,12 +47,15 @@ export function useMarketData(symbol, interval) {
       const buf = bufRef.current;
       const mode = !buf || forceFull ? 'full' : 'tail';
       try {
-        const res = await fetchAnalysis(symbol, interval, mode);
+        const [res, live] = await Promise.all([
+          fetchAnalysis(symbol, interval, mode),
+          fetchLiveMarket(symbol, interval, mode),
+        ]);
         if (cancelled) return;
         let candles, series;
-        if (mode === 'full') ({ candles, series } = res);
+        if (mode === 'full') ({ candles, series } = live);
         else {
-          const merged = mergeTail(buf, res);
+          const merged = mergeTail(buf, live);
           if (!merged) return tick(true);
           ({ candles, series } = merged);
         }
@@ -58,8 +63,15 @@ export function useMarketData(symbol, interval) {
         fails = 0;
         setFeed((prev) => ({ key, seq: (prev?.seq || 0) + 1, full: mode === 'full', candles, series }));
         const { candles: _c, series: _s, ...rest } = res;
+        rest.quote = live.quote;
+        rest.marketStatus = live.marketStatus;
+        rest.candleLagSec = live.candleLagSec;
+        rest.fetchedAt = live.fetchedAt;
+        rest.source = live.source;
+        rest.chartSource = live.source;
+        rest.analysisSource = res.source;
         setState({ status: 'ok', data: rest, error: null, lastSuccess: Date.now(), nextRetryAt: null });
-        schedule(pollDelay(res));
+        schedule(pollDelay(live));
       } catch (err) {
         if (cancelled) return;
         const e = normalizeError(err);

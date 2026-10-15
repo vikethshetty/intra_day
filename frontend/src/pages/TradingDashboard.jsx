@@ -98,7 +98,7 @@ export default function TradingDashboard() {
           <div className="updated">
             <span className="k">Last updated</span>
             <b>{lastSuccess ? clock(lastSuccess) : '—'}</b>
-            <small>{data ? `Source: ${data.source}` : ''}</small>
+            <small>{data ? `Live quote/chart: ${data.chartSource} · Analysis: ${data.analysisSource}` : ''}</small>
           </div>
           <button type="button" className={`icon-btn bell ${notifyState === 'granted' ? 'on' : ''}`} title={notifyState === 'granted' ? 'Browser notifications enabled' : notifyState === 'denied' ? 'Notifications blocked in browser settings' : 'Enable browser notifications for alerts'} onClick={enableNotifications} disabled={notifyState === 'unsupported' || notifyState === 'denied'}>
             <i className={`bi ${notifyState === 'granted' ? 'bi-bell-fill' : 'bi-bell'}`} />
@@ -161,7 +161,7 @@ export default function TradingDashboard() {
         <footer className="disclaimer">
           <i className="bi bi-shield-exclamation" />
           <p>
-            <b>Not financial advice.</b> Probabilities and levels are technical-analysis estimates from past price action, for personal study only. Markets can move against any setup, and this app never places trades. Data: {data?.source || 'market-data provider'}
+            <b>Not financial advice.</b> Probabilities and levels are technical-analysis estimates from past price action, for personal study only. Markets can move against any setup, and this app never places trades. Live quote/chart: {data?.chartSource || 'Upstox'}; analysis and historical context: {data?.analysisSource || 'Yahoo Finance'}
             {data ? `, ${data.interval} candles, fetched ${clock(data.fetchedAt)} IST` : ''}. Quotes may be delayed or incomplete.
           </p>
         </footer>

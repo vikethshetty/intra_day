@@ -332,10 +332,10 @@ const backtestCache = new Map();
 export function runBacktest(ctx, timeline, cacheKey, options = {}) {
   const { candles } = ctx;
   const n = candles.length;
-  const { startTime = null, endTime = null, minConfidence = 0, includeTrades = false, useHistoryConfidence = false } = options;
+  const { startTime = null, endTime = null, minConfidence = 0, maxConfidence = 100, includeTrades = false, useHistoryConfidence = false } = options;
   let last = n - 2;
   while (last >= 0 && endTime != null && candles[last].time > endTime) last--;
-  const ck = `${cacheKey}|${n}|${candles[n - 1].time}|${startTime}|${endTime}|${minConfidence}|${includeTrades}|${useHistoryConfidence}`;
+  const ck = `${cacheKey}|${n}|${candles[n - 1].time}|${startTime}|${endTime}|${minConfidence}|${maxConfidence}|${includeTrades}|${useHistoryConfidence}`;
   if (backtestCache.has(ck)) return backtestCache.get(ck);
   const label = 'HISTORICAL BACKTEST - past results do not predict or guarantee future performance';
   if (n < 150) {
@@ -359,7 +359,7 @@ export function runBacktest(ctx, timeline, cacheKey, options = {}) {
         if (!useHistoryConfidence || historyContext.available) {
           const setup = buildTradeSetup(ctx, j - 1, snap, scoring, prev.stable, null, entry, historyContext);
           const okSide = dir === 'LONG' ? setup.stopLoss < entry && setup.target1 > entry : setup.stopLoss > entry && setup.target1 < entry;
-          if (okSide && setup.risk > 0 && setup.confidence >= minConfidence) {
+          if (okSide && setup.risk > 0 && setup.confidence >= minConfidence && setup.confidence <= maxConfidence) {
             pos = {
               symbol: ctx.symbol || null,
               dir, entry, stop: setup.stopLoss, t1: setup.target1, t2: setup.target2,
@@ -402,7 +402,7 @@ export function runBacktest(ctx, timeline, cacheKey, options = {}) {
     maxDrawdownPct: maxDd * 100,
     from: candles[0].time, to: candles[last].time, candlesTested: last + 1,
     message: trades.length === 0 ? 'No qualifying BUY/SELL signals occurred in the loaded history.' : trades.length < 20 ? `Small sample (${trades.length} trades) - treat these statistics as weak evidence.` : null,
-    assumptions: `Entry at next bar open; ${useHistoryConfidence ? `confidence >= ${minConfidence}% using historical daily context; ` : ''}stop-first on ambiguous bars; 1% equity risked per trade; no brokerage/slippage/taxes.`,
+    assumptions: `Entry at next bar open; ${useHistoryConfidence ? `confidence ${minConfidence}%–${maxConfidence}% using historical daily context; ` : ''}stop-first on ambiguous bars; 1% equity risked per trade; no brokerage/slippage/taxes.`,
   };
   if (includeTrades) result.trades = trades;
   backtestCache.set(ck, result);

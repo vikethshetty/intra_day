@@ -35,7 +35,7 @@ export const INTERVALS = {
   '5m': { yahoo: '5m', range: '1mo', agg: 1, seconds: 300, ttl: 5000, twelve: '5min' },
   '15m': { yahoo: '15m', range: '1mo', agg: 1, seconds: 900, ttl: 8000, twelve: '15min' },
   '30m': { yahoo: '30m', range: '1mo', agg: 1, seconds: 1800, ttl: 10000, twelve: '30min' },
-  '1H': { yahoo: '60m', range: '3mo', agg: 1, seconds: 3600, ttl: 15000, twelve: '1h' },
+  '1H': { yahoo: '60m', range: '1y', agg: 1, seconds: 3600, ttl: 15000, twelve: '1h' },
   '1D': { yahoo: '1d', range: '2y', agg: 1, seconds: 86400, ttl: 60000, twelve: '1day' },
 };
 

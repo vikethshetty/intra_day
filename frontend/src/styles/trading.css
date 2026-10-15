@@ -411,6 +411,15 @@ code { background: rgba(30, 60, 120, 0.08); padding: 1px 5px; border-radius: 5px
 .daily-confidence-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--violet)); }
 .period-choice { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .period-choice .on { color: #fff; background: linear-gradient(135deg, var(--blue), var(--violet)); border-color: transparent; }
+.backtest-controls { grid-template-columns: 1fr 1fr; align-items: end; }
+.backtest-date-controls, .backtest-confidence-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.backtest-confidence-controls { grid-template-columns: minmax(0, 1.2fr) minmax(110px, 0.8fr); }
+.backtest-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.backtest-controls input, .backtest-controls select { width: 100%; min-width: 0; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; background: rgba(255, 255, 255, 0.92); color: var(--ink); font: inherit; font-weight: 500; }
+.backtest-range-inputs { display: flex; align-items: end; gap: 8px; }
+.backtest-range-inputs label { flex: 1; min-width: 0; }
+.backtest-range-inputs > span { padding-bottom: 10px; color: var(--muted); font-size: 12px; }
+.backtest-control-hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; }
 .backtest-meta { align-items: center; }
 .backtest-meta span b { display: block; font-size: 16px; }
 .backtest-results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
@@ -420,7 +429,7 @@ code { background: rgba(30, 60, 120, 0.08); padding: 1px 5px; border-radius: 5px
 .backtest-results b { margin-top: 4px; font-size: 20px; }
 .backtest-trade-list { padding: 18px; margin-top: 12px; }
 .backtest-trade-list .table { --bs-table-bg: transparent; --bs-table-color: var(--ink); --bs-table-border-color: var(--line); font-size: 13px; white-space: nowrap; }
-@media (max-width: 760px) { .backtest-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } .period-choice { justify-content: flex-start; } }
+@media (max-width: 760px) { .backtest-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } .period-choice { justify-content: flex-start; } .backtest-controls, .backtest-date-controls, .backtest-confidence-controls { grid-template-columns: 1fr; } }
 .daily-stock-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .daily-stock-stats span { min-width: 0; }
 .daily-stock-stats small { display: block; color: var(--muted); font-size: 11px; }

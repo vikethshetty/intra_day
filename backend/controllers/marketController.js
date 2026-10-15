@@ -192,8 +192,10 @@ export const nifty50Top10 = wrap(async (req, res) => {
 export const nifty50Backtest = wrap(async (req, res) => {
   res.json(await getNifty50BacktestBatch({
     offset: req.query.offset,
-    periodDays: req.query.periodDays,
-    endTime: req.query.endTime,
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+    minConfidence: req.query.minConfidence,
+    maxConfidence: req.query.maxConfidence,
   }));
 });
 
@@ -202,8 +204,10 @@ export const dailyTop10Backtest = wrap(async (req, res) => {
   res.json(await getDailyTop10BacktestBatch({
     symbols,
     offset: req.query.offset,
-    periodDays: req.query.periodDays,
-    endTime: req.query.endTime,
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+    minConfidence: req.query.minConfidence,
+    maxConfidence: req.query.maxConfidence,
   }));
 });
 

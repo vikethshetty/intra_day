@@ -14,7 +14,6 @@ const BATCH_SIZE = 12;
 const CONCURRENCY = 4;
 const BACKTEST_BATCH_SIZE = 5;
 const BACKTEST_CONCURRENCY = 2;
-const BACKTEST_MIN_CONFIDENCE = 70;
 let universeCache = null;
 let nifty50UniverseCache = null;
 const batchCache = new Map();
@@ -222,7 +221,7 @@ async function getTop10Batch(rawOffset = 0, scope = 'nse') {
 export const getDailyTop10Batch = (rawOffset = 0) => getTop10Batch(rawOffset, 'nse');
 export const getNifty50Top10Batch = (rawOffset = 0) => getTop10Batch(rawOffset, 'nifty50');
 
-async function backtestOne(stock, startTime, endTime) {
+async function backtestOne(stock, startTime, endTime, minConfidence, maxConfidence) {
   try {
     const data = await getCandles(`${stock.symbol}.NS`, '1H', 'yahoo');
     const ctx = buildContext(data.candles, '1H');
@@ -232,7 +231,8 @@ async function backtestOne(stock, startTime, endTime) {
     const result = runBacktest(ctx, timeline, cacheKey, {
       startTime,
       endTime,
-      minConfidence: BACKTEST_MIN_CONFIDENCE,
+      minConfidence,
+      maxConfidence,
       includeTrades: true,
       useHistoryConfidence: true,
     });
@@ -252,13 +252,37 @@ async function backtestOne(stock, startTime, endTime) {
 }
 
 /** Return a small page of historical simulations to keep each Vercel request bounded. */
-async function getScannerBacktestBatch({ scope, symbols: requestedSymbols = [], offset: rawOffset = 0, periodDays: rawPeriodDays = 7, endTime: rawEndTime = null } = {}) {
+function parseIstDate(value, label) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  if (!match) throw new MarketDataError('BAD_REQUEST', `Choose a valid ${label} date.`, 400);
+  const [, y, m, d] = match;
+  const utc = Date.UTC(Number(y), Number(m) - 1, Number(d));
+  const date = new Date(utc);
+  if (date.getUTCFullYear() !== Number(y) || date.getUTCMonth() + 1 !== Number(m) || date.getUTCDate() !== Number(d)) {
+    throw new MarketDataError('BAD_REQUEST', `Choose a valid ${label} date.`, 400);
+  }
+  return Math.floor(utc / 1000) - 19800;
+}
+
+async function getScannerBacktestBatch({ scope, symbols: requestedSymbols = [], offset: rawOffset = 0, startDate: rawStartDate, endDate: rawEndDate, minConfidence: rawMinConfidence = 70, maxConfidence: rawMaxConfidence = 100 } = {}) {
   const provider = getProviderStatus('yahoo');
   if (!provider.configured) throw new MarketDataError('PROVIDER_NOT_CONFIGURED', provider.message, 503);
-  const periodDays = Number(rawPeriodDays);
-  if (![7, 14, 21, 30, 60].includes(periodDays)) throw new MarketDataError('BAD_REQUEST', 'periodDays must be 7, 14, 21, 30 or 60.', 400);
-  const endTime = Number.isFinite(Number(rawEndTime)) && Number(rawEndTime) > 0 ? Math.floor(Number(rawEndTime)) : Math.floor(Date.now() / 1000);
-  const startTime = endTime - periodDays * 86400;
+  const startDate = String(rawStartDate || '');
+  const endDate = String(rawEndDate || '');
+  const startTime = parseIstDate(startDate, 'start');
+  const endTime = parseIstDate(endDate, 'end') + 86400 - 1;
+  if (startTime > endTime) throw new MarketDataError('BAD_REQUEST', 'The start date must be on or before the end date.', 400);
+  const nowIst = Math.floor((Date.now() / 1000 + 19800) / 86400) * 86400 - 19800;
+  if (endTime >= nowIst + 86400) throw new MarketDataError('BAD_REQUEST', 'The end date cannot be in the future.', 400);
+  if (startTime < nowIst - 365 * 86400) throw new MarketDataError('BAD_REQUEST', 'Choose a start date within the last year. The available hourly history can vary by symbol.', 400);
+  if (String(rawMinConfidence).trim() === '' || String(rawMaxConfidence).trim() === '') {
+    throw new MarketDataError('BAD_REQUEST', 'Provide both confidence bounds as whole percentages from 0 to 100.', 400);
+  }
+  const minConfidence = Number(rawMinConfidence);
+  const maxConfidence = Number(rawMaxConfidence);
+  if (!Number.isInteger(minConfidence) || !Number.isInteger(maxConfidence) || minConfidence < 0 || maxConfidence > 100 || minConfidence > maxConfidence) {
+    throw new MarketDataError('BAD_REQUEST', 'Confidence bounds must be whole percentages from 0 to 100, with the minimum no greater than the maximum.', 400);
+  }
   let stocks;
   if (scope === 'nifty50') stocks = await getNifty50Universe();
   else if (scope === 'dailyTop10') {
@@ -269,12 +293,12 @@ async function getScannerBacktestBatch({ scope, symbols: requestedSymbols = [], 
     stocks = symbols.map((symbol) => ({ symbol, name: symbol }));
   } else throw new MarketDataError('BAD_REQUEST', 'Unknown backtest universe.', 400);
   const offset = Math.max(0, Math.min(Number.parseInt(rawOffset, 10) || 0, stocks.length));
-  const cacheKey = `${provider.id}:${scope}:${stocks.map((stock) => stock.symbol).join(',')}:${periodDays}:${endTime}:${offset}`;
+  const cacheKey = `${provider.id}:${scope}:${stocks.map((stock) => stock.symbol).join(',')}:${startDate}:${endDate}:${minConfidence}:${maxConfidence}:${offset}`;
   const cached = backtestBatchCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < 10 * 60 * 1000) return { ...cached.data, cached: true };
 
   const batch = stocks.slice(offset, offset + BACKTEST_BATCH_SIZE);
-  const results = await mapLimit(batch, BACKTEST_CONCURRENCY, (stock) => backtestOne(stock, startTime, endTime));
+  const results = await mapLimit(batch, BACKTEST_CONCURRENCY, (stock) => backtestOne(stock, startTime, endTime, minConfidence, maxConfidence));
   const nextOffset = offset + batch.length;
   const data = {
     ok: true,
@@ -283,10 +307,12 @@ async function getScannerBacktestBatch({ scope, symbols: requestedSymbols = [], 
     universeLabel: scope === 'nifty50' ? 'NIFTY 50 constituents' : 'Current Daily Top 10 shares',
     universeCount: stocks.length,
     interval: '1H',
-    periodDays,
+    startDate,
+    endDate,
     startTime,
     endTime,
-    minConfidence: BACKTEST_MIN_CONFIDENCE,
+    minConfidence,
+    maxConfidence,
     offset,
     nextOffset,
     processedCount: batch.length,

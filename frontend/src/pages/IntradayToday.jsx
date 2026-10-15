@@ -9,7 +9,8 @@ import AlertToasts from '../components/AlertToasts.jsx';
 import MarketStatus, { DataBanner } from '../components/MarketStatus.jsx';
 import { useMarketData } from '../hooks/useMarketData.js';
 import { useAlerts } from '../hooks/useAlerts.js';
-import { useTrackedTrade } from '../hooks/useTrackedTrade.js';
+import { evaluateTrade, useTrackedTrade } from '../hooks/useTrackedTrade.js';
+import { useTrackingMarketData } from '../hooks/useTrackingMarketData.js';
 import { clock, inr, pct } from '../services/format.js';
 
 const TFS = ['1m', '3m', '5m', '15m'];
@@ -24,10 +25,7 @@ export default function IntradayToday() {
   useEffect(() => { try { localStorage.setItem('lia.symbol', symbol); localStorage.setItem('lia.today.tf', interval); } catch { /* storage unavailable */ } }, [symbol, interval]);
 
   const analysis = data?.analysis;
-  const quote = data?.quote;
   const call = analysis?.intraday;
-  const stale = status === 'error' && !!data;
-  const price = stale ? null : quote?.price;
 
   /* ---- only today's session goes to the chart ---- */
   const dayStart = useMemo(() => (feed ? Math.floor((feed.candles[feed.candles.length - 1].time + 19800) / 86400) * 86400 - 19800 : 0), [feed]);
@@ -43,7 +41,12 @@ export default function IntradayToday() {
   }, [feed, dayStart]);
 
   /* ---- tracked trade + alerts ---- */
-  const { tracked, state: trk, track, clear } = useTrackedTrade(symbol, todayFeed?.candles, price);
+  const { tracked, track, clear } = useTrackedTrade(symbol, null, null);
+  const trackingFeed = useTrackingMarketData(symbol, '1m', Boolean(tracked));
+  const trk = useMemo(() => evaluateTrade(tracked, trackingFeed.data?.candles || [], trackingFeed.data?.quote?.price ?? null), [tracked, trackingFeed.data]);
+  const quote = tracked ? (trackingFeed.data?.quote || data?.quote) : data?.quote;
+  const stale = status === 'error' && !!data;
+  const price = stale ? null : quote?.price;
   const callEvent = useMemo(() => {
     if (!call || !['BUY_NOW', 'SELL_NOW', 'SQUARE_OFF'].includes(call.verdict)) return null;
     const date = new Date(Date.now() + 19800 * 1000).toISOString().slice(0, 10);
@@ -90,7 +93,11 @@ export default function IntradayToday() {
 
         <div className="row g-3">
           <div className="col-12 col-xl-7"><CallCard call={call} asOf={analysis?.asOf} price={price} canTrack={canTrack} tracking={!!tracked} onTrack={() => track(call.plan.direction ? { ...call.plan, entry: call.trigger ?? call.plan.entry } : call.plan, quote.price)} /></div>
-          <div className="col-12 col-xl-5"><TradeTracker state={trk} onClear={clear} mins={mins} /></div>
+          <div className="col-12 col-xl-5">
+            <TradeTracker state={trk} onClear={clear} mins={mins} />
+            {tracked && trackingFeed.error && <div className="banner err mt-2"><strong>Upstox tracking data unavailable:</strong> {trackingFeed.error.message}</div>}
+            {tracked && trackingFeed.data && <p className="fine text-end">Trade tracking price: Upstox · updated {clock(Math.floor(trackingFeed.data.fetchedAt / 1000))}</p>}
+          </div>
         </div>
 
         <LiveChart
@@ -125,7 +132,7 @@ export default function IntradayToday() {
 
         <footer className="disclaimer">
           <i className="bi bi-shield-exclamation" />
-          <p><b>Not financial advice.</b> BUY NOW / SELL NOW are rule-based technical signals from delayed, unofficial data and can be wrong. Always use the stop-loss, risk only what you can lose, and square off intraday positions before about 3:15 PM. This app never places trades. Data: {data?.source || 'market-data provider'}{data ? `, ${data.interval} candles` : ''}.</p>
+          <p><b>Not financial advice.</b> BUY NOW / SELL NOW are rule-based signals calculated from Yahoo Finance candles. When you track a trade, Upstox candles monitor price against the fixed entry, stop, and target levels. Data feeds can differ; confirm orders with your broker. This app never places trades.</p>
         </footer>
       </main>
       <AlertToasts toasts={toasts} onDismiss={dismissToast} />

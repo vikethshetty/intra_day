@@ -13,6 +13,7 @@
  *  - timeframes the provider lacks (3m) are aggregated from real 1m candles
  */
 import axios from 'axios';
+import { gunzipSync } from 'node:zlib';
 import { IST_OFFSET, istDayKey, istMinutes } from '../utils/indicators.js';
 import { normalizeSymbol, localSearch } from '../utils/symbols.js';
 
@@ -185,9 +186,11 @@ const UPSTOX_INTERVALS = {
   '1D': ['days', 1, 730],
 };
 const upstoxInstrumentCache = new Map();
+const upstoxInstrumentMasters = new Map();
+const UPSTOX_INSTRUMENT_TTL_MS = 6 * 60 * 60 * 1000;
 
 function upstoxToken() {
-  return process.env.UPSTOX_ACCESS_TOKEN || process.env.MARKET_DATA_API_KEY;
+  return process.env.UPSTOX_ACCESS_TOKEN?.trim() || '';
 }
 
 function istDate(daysAgo = 0) {
@@ -204,6 +207,22 @@ function asUpstoxCandle(row) {
   };
   return Number.isFinite(candle.time) && [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)
     ? candle : null;
+}
+
+async function getUpstoxInstrumentMaster(exchange) {
+  const cached = upstoxInstrumentMasters.get(exchange);
+  if (cached && Date.now() - cached.loadedAt < UPSTOX_INSTRUMENT_TTL_MS) return cached.items;
+  try {
+    const { data } = await axios.get(`https://assets.upstox.com/market-quote/instruments/exchange/${exchange}.json.gz`, {
+      responseType: 'arraybuffer', decompress: false, headers: { 'Accept-Encoding': 'gzip' }, timeout: 20000,
+    });
+    const items = JSON.parse(gunzipSync(Buffer.from(data)).toString('utf8'));
+    if (!Array.isArray(items) || !items.length) throw new Error('Instrument list is empty.');
+    upstoxInstrumentMasters.set(exchange, { loadedAt: Date.now(), items });
+    return items;
+  } catch (err) {
+    throw new MarketDataError('INSTRUMENTS_UNAVAILABLE', `Could not load Upstox's ${exchange} instrument list. ${err.message || 'Try again shortly.'}`, 503);
+  }
 }
 
 const upstox = {
@@ -235,13 +254,12 @@ const upstox = {
     const exchange = suffix === 'BO' ? 'BSE' : 'NSE';
     const cacheKey = `${exchange}:${base}`;
     if (upstoxInstrumentCache.has(cacheKey)) return upstoxInstrumentCache.get(cacheKey);
-    const data = await this.request('/v2/instruments/search', {
-      query: base, exchanges: exchange, segments: 'EQ', records: 30,
-    });
-    const items = data?.data || [];
+    const items = await getUpstoxInstrumentMaster(exchange);
     const wanted = base.replace(/[^A-Z0-9]/g, '');
-    const match = items.find((item) => (item.trading_symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === wanted)
-      || items.find((item) => item.instrument_type === 'EQ' && (item.trading_symbol || '').toUpperCase() === base.toUpperCase());
+    const match = items.find((item) => item.exchange === exchange
+      && item.segment === `${exchange}_EQ`
+      && ['EQ', 'BE', 'BZ'].includes(item.instrument_type)
+      && (item.trading_symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === wanted);
     if (!match?.instrument_key) throw new MarketDataError('INVALID_SYMBOL', `${base} was not found as an ${exchange} equity on Upstox.`, 404);
     const instrument = { key: match.instrument_key, name: match.name || match.trading_symbol, exchange };
     upstoxInstrumentCache.set(cacheKey, instrument);
@@ -291,14 +309,16 @@ const upstox = {
 
   async search(q) {
     try {
-      const data = await this.request('/v2/instruments/search', {
-        query: q.trim(), exchanges: 'NSE,BSE', segments: 'EQ', records: 30,
-      });
-      return (data?.data || []).filter((item) => item.instrument_type === 'EQ' && item.trading_symbol)
+      const query = q.trim().toUpperCase();
+      const [nse, bse] = await Promise.all([getUpstoxInstrumentMaster('NSE'), getUpstoxInstrumentMaster('BSE')]);
+      return [...nse, ...bse].filter((item) => ['EQ', 'BE', 'BZ'].includes(item.instrument_type)
+        && item.trading_symbol
+        && (`${item.trading_symbol} ${item.name || ''}`).toUpperCase().includes(query))
+        .slice(0, 10)
         .map((item) => ({
           symbol: item.trading_symbol,
           name: item.name || item.trading_symbol,
-          exchange: String(item.exchange || item.instrument_key || '').startsWith('BSE') ? 'BSE' : 'NSE',
+          exchange: item.exchange,
         }));
     } catch {
       return null;
@@ -308,8 +328,8 @@ const upstox = {
 
 const PROVIDERS = { yahoo, twelvedata, upstox };
 
-export function getProviderStatus() {
-  const id = (process.env.MARKET_DATA_PROVIDER || 'yahoo').trim().toLowerCase();
+export function getProviderStatus(providerId = null) {
+  const id = (providerId || process.env.MARKET_DATA_PROVIDER || 'yahoo').trim().toLowerCase();
   const p = PROVIDERS[id];
   if (!p) {
     return { configured: false, id, label: 'Not configured', message: `MARKET_DATA_PROVIDER="${process.env.MARKET_DATA_PROVIDER}" is not a supported provider. Use one of: ${Object.keys(PROVIDERS).join(', ')} in backend/.env.` };
@@ -321,8 +341,8 @@ export function getProviderStatus() {
   return { configured: true, id, label: p.label, message: null };
 }
 
-function activeProvider() {
-  const st = getProviderStatus();
+function activeProvider(providerId = null) {
+  const st = getProviderStatus(providerId);
   if (!st.configured) throw new MarketDataError('PROVIDER_NOT_CONFIGURED', st.message, 503);
   return PROVIDERS[st.id];
 }
@@ -358,11 +378,11 @@ export function aggregateCandles(candles, minutes) {
 const cache = new Map(); // key -> { at, data }
 const inflight = new Map();
 
-export async function getCandles(symbolInput, intervalInput = '1m') {
+export async function getCandles(symbolInput, intervalInput = '1m', providerId = null) {
   const interval = normalizeInterval(intervalInput);
   const sym = normalizeSymbol(symbolInput);
   if (!sym) throw new MarketDataError('INVALID_SYMBOL', 'Invalid symbol. Use letters/numbers, e.g. HEROMOTOCO, RELIANCE, TCS.', 400);
-  const provider = activeProvider();
+  const provider = activeProvider(providerId);
   const cfg = INTERVALS[interval];
   const key = `${provider.id}|${sym.base}${sym.suffix || ''}|${interval}`;
 
@@ -464,16 +484,16 @@ export function buildQuote(candles, meta = {}) {
 }
 
 /** Quote is always derived from 1m candles so the header is consistent across chart timeframes. */
-export async function getQuote(symbolInput) {
-  const d = await getCandles(symbolInput, '1m');
+export async function getQuote(symbolInput, providerId = null) {
+  const d = await getCandles(symbolInput, '1m', providerId);
   return { quote: buildQuote(d.candles, d.meta), data: d };
 }
 
-export async function searchSymbols(q) {
+export async function searchSymbols(q, providerId = null) {
   const local = localSearch(q, 8);
   if (!q || q.trim().length < 2) return { results: local, source: 'local' };
   try {
-    const st = getProviderStatus();
+    const st = getProviderStatus(providerId);
     if (st.configured && PROVIDERS[st.id].search) {
       const remote = await PROVIDERS[st.id].search(q);
       if (remote && remote.length) {

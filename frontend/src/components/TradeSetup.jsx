@@ -22,6 +22,8 @@ export default function TradeSetup({ setup }) {
         <div className="cell"><span className="k">Signal strength</span><b>{setup.signalStrength}/100</b><small>confidence {setup.confidence}%</small></div>
       </div>
       {setup.confirmation && <div className="note info"><i className="bi bi-hourglass-split" /> <span><b>Confirmation required:</b> {setup.confirmation}</span></div>}
+      {setup.historyContext && <p className="fine">One-month trend: {setup.historyContext.trend.toLowerCase()} from {setup.historyContext.candleCount} daily candles.</p>}
+      {setup.candlePattern && <p className="fine">Entry and targets also consider the {setup.candlePattern.name} candle pattern.</p>}
       <div className="note neutral"><i className="bi bi-x-octagon" /> <span><b>Invalidation:</b> {setup.invalidation}</span></div>
       <p className="fine">Targets: {setup.target1Note}; {setup.target2Note}. Confidence is capped at 90% - no setup is ever treated as certain.</p>
     </section>

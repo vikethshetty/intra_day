@@ -22,3 +22,11 @@ export const searchSymbols = (q) => http.get('/search', { params: { q } }).then(
 export const fetchHealth = () => http.get('/health').then((r) => r.data);
 export const fetchDailyTop10Batch = (offset = 0) =>
   http.get('/scanner/top10', { params: { offset }, timeout: 45000 }).then((r) => r.data);
+export const fetchNifty50Top10Batch = (offset = 0) =>
+  http.get('/scanner/nifty50/top10', { params: { offset }, timeout: 45000 }).then((r) => r.data);
+export const fetchNifty50BacktestBatch = (offset, periodDays, endTime) =>
+  http.get('/scanner/nifty50/backtest', { params: { offset, periodDays, endTime }, timeout: 55000 }).then((r) => r.data);
+export const fetchDailyTop10BacktestBatch = (symbols, offset, periodDays, endTime) =>
+  http.get('/scanner/top10/backtest', { params: { symbols: symbols.join(','), offset, periodDays, endTime }, timeout: 55000 }).then((r) => r.data);
+export const fetchTrackingData = (symbol, interval) =>
+  http.get(`/tracking/${enc(symbol)}`, { params: { interval }, timeout: 15000 }).then((r) => r.data);

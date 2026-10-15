@@ -10,9 +10,9 @@
  */
 import { clamp, istMinutes, roundToTick, TICK } from '../utils/indicators.js';
 import {
-  buildSnapshot, calculateStopLoss, calculateTargets, calculateVolumeStrength,
-  detectMarketStructure, detectSupportResistance,
+  buildSnapshot, calculateStopLoss, calculateTargets,
 } from './technicalAnalysisService.js';
+import { aggregateDailyCandles, getHistoryContext } from './historyContextService.js';
 
 export const sideOf = (signal) => (/BUY/.test(signal) ? 'LONG' : /SELL/.test(signal) ? 'SHORT' : null);
 
@@ -208,17 +208,19 @@ export function signalHistory(timeline, limit = 40) {
 /* ------------------------------------------------------------------ */
 /* Trade setup                                                         */
 /* ------------------------------------------------------------------ */
-export function setupConfidence(scoring, snap, direction) {
+export function setupConfidence(scoring, snap, direction, historyContext = null) {
   const s = direction === 'LONG' ? scoring.long : scoring.short;
   let c = 0.6 * s.total + 0.25 * (s.met / 7) * 100 + 0.15 * snap.structure.strength;
   if (/POSSIBLE_FALSE|FALSE/.test(snap.breakout.status)) c -= 15;
   if (direction === 'LONG' && snap.structure.trend === 'BEARISH') c -= 10;
   if (direction === 'SHORT' && snap.structure.trend === 'BULLISH') c -= 10;
+  if (historyContext?.available && direction === 'LONG' && historyContext.trend === 'BEARISH') c -= 10;
+  if (historyContext?.available && direction === 'SHORT' && historyContext.trend === 'BULLISH') c -= 10;
   if (snap.volume.ratio < 0.8) c -= 5;
   return Math.round(clamp(c, 15, 90)); // capped below 100: nothing here is certain
 }
 
-export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOverride = null, entryOverride = null) {
+export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOverride = null, entryOverride = null, historyContext = null) {
   const stableSide = sideOf(stableSignal);
   const direction = directionOverride || stableSide || scoring.direction;
   const long = direction === 'LONG';
@@ -235,7 +237,25 @@ export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOv
   const tf = ctx.interval === '1m' || ctx.interval === '3m' ? '5-minute' : ctx.interval;
 
   let status, entry, confirmation = null;
-  const trigger = ahead ? roundToTick(ahead.price + (long ? 1 : -1) * 0.1 * atr, long ? 'up' : 'down') : null;
+  let trigger = ahead ? roundToTick(ahead.price + (long ? 1 : -1) * 0.1 * atr, long ? 'up' : 'down') : null;
+  const matchingPattern = snap.patterns.find((pattern) => pattern.age <= 1
+    && (long ? pattern.bias === 'bullish' : pattern.bias === 'bearish'));
+  let patternTrigger = null, patternRange = 0;
+  if (matchingPattern) {
+    const name = matchingPattern.name;
+    const patternLength = /Morning Star|Evening Star|Three White Soldiers|Three Black Crows/.test(name) ? 3 : /Engulfing/.test(name) ? 2 : 1;
+    const patternBars = ctx.candles.slice(Math.max(0, matchingPattern.barIndex - patternLength + 1), matchingPattern.barIndex + 1);
+    if (patternBars.length) {
+      const patternHigh = Math.max(...patternBars.map((candle) => candle.high));
+      const patternLow = Math.min(...patternBars.map((candle) => candle.low));
+      patternRange = patternHigh - patternLow;
+      patternTrigger = roundToTick(
+      long ? patternHigh + 0.1 * atr : patternLow - 0.1 * atr,
+      long ? 'up' : 'down',
+      );
+    }
+  }
+  if (patternTrigger != null) trigger = trigger == null ? patternTrigger : (long ? Math.max(trigger, patternTrigger) : Math.min(trigger, patternTrigger));
   if (entryOverride != null) { status = 'USER-DEFINED ENTRY'; entry = entryOverride; }
   else if (directionOverride) { status = `MANUAL ${verb} AT CURRENT PRICE`; entry = price; }
   else if (!active) {
@@ -247,6 +267,10 @@ export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOv
     status = 'WAIT FOR PULLBACK';
     entry = pb ? roundToTick(pb.price) : price;
     confirmation = `Price is more than 2 ATR from EMA 20 - wait for a pullback toward ₹${entry.toFixed(2)} that holds`;
+  } else if (matchingPattern && trigger != null && (long ? price < trigger : price > trigger)) {
+    status = `${verb} ON CONFIRMATION`;
+    entry = trigger;
+    confirmation = `Wait for a candle-pattern breakout: ${matchingPattern.name} candle close ${long ? 'above' : 'below'} ₹${trigger.toFixed(2)} with follow-through`;
   } else if (!brokeSide && ahead && gap <= 0.8 * atr) {
     status = `${verb} ON CONFIRMATION`;
     entry = trigger;
@@ -258,7 +282,25 @@ export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOv
 
   const sl = calculateStopLoss(ctx, i, direction, levels, { entry, structure: snap.structure, volume: snap.volume });
   const tg = calculateTargets(ctx, i, direction, entry, sl.stopLoss, levels);
-  const confidence = setupConfidence(scoring, snap, direction);
+  if (matchingPattern) {
+    const measuredTarget1 = entry + (long ? 1 : -1) * patternRange;
+    const measuredTarget2 = entry + (long ? 2 : -2) * patternRange;
+    const target1Reward = long ? measuredTarget1 - entry : entry - measuredTarget1;
+    const target2Reward = long ? measuredTarget2 - entry : entry - measuredTarget2;
+    if (patternRange > 0 && target1Reward >= sl.risk && (long ? measuredTarget1 < tg.target1 : measuredTarget1 > tg.target1)) {
+      tg.target1 = roundToTick(measuredTarget1, long ? 'down' : 'up');
+      tg.target1Note = `one-candle measured move from ${matchingPattern.name}`;
+    }
+    if (patternRange > 0 && target2Reward > target1Reward && (long ? measuredTarget2 < tg.target2 : measuredTarget2 > tg.target2)) {
+      tg.target2 = roundToTick(measuredTarget2, long ? 'down' : 'up');
+      tg.target2Note = `two-candle-range projection from ${matchingPattern.name}`;
+    }
+    tg.reward1 = Math.abs(tg.target1 - entry);
+    tg.reward2 = Math.abs(tg.target2 - entry);
+    tg.rr1 = sl.risk > 0 ? tg.reward1 / sl.risk : null;
+    tg.rr2 = sl.risk > 0 ? tg.reward2 / sl.risk : null;
+  }
+  const confidence = setupConfidence(scoring, snap, direction, historyContext);
   const s = long ? scoring.long : scoring.short;
   return {
     direction, status, active,
@@ -266,6 +308,8 @@ export function buildTradeSetup(ctx, i, snap, scoring, stableSignal, directionOv
     target1: tg.target1, target2: tg.target2, reward1: tg.reward1, reward2: tg.reward2, rr1: tg.rr1, rr2: tg.rr2,
     target1Note: tg.target1Note, target2Note: tg.target2Note,
     signalStrength: s.total, confidence, confirmation,
+    historyContext,
+    candlePattern: matchingPattern ? { name: matchingPattern.name, bias: matchingPattern.bias, strength: matchingPattern.strength, trigger: patternTrigger } : null,
     invalidation: `Setup invalid if price ${long ? 'falls below' : 'rises above'} ₹${sl.stopLoss.toFixed(2)}`,
     stop: sl,
     checks: s.checks, met: s.met,
@@ -285,11 +329,13 @@ const backtestCache = new Map();
  *  - intraday trades are closed at the last bar of the session; max hold 60 bars
  *  - drawdown assumes risking 1% of equity per trade, compounded; no brokerage or slippage
  */
-export function runBacktest(ctx, timeline, cacheKey) {
+export function runBacktest(ctx, timeline, cacheKey, options = {}) {
   const { candles } = ctx;
   const n = candles.length;
-  const last = n - 2;
-  const ck = `${cacheKey}|${n}|${candles[n - 1].time}`;
+  const { startTime = null, endTime = null, minConfidence = 0, includeTrades = false, useHistoryConfidence = false } = options;
+  let last = n - 2;
+  while (last >= 0 && endTime != null && candles[last].time > endTime) last--;
+  const ck = `${cacheKey}|${n}|${candles[n - 1].time}|${startTime}|${endTime}|${minConfidence}|${includeTrades}|${useHistoryConfidence}`;
   if (backtestCache.has(ck)) return backtestCache.get(ck);
   const label = 'HISTORICAL BACKTEST - past results do not predict or guarantee future performance';
   if (n < 150) {
@@ -305,15 +351,24 @@ export function runBacktest(ctx, timeline, cacheKey) {
       const isNew = dir && strongSide(timeline[j - 2].stable) !== dir;
       const sameDay = ctx.isDaily || ctx.dayOf[j] === ctx.dayOf[j - 1];
       const timeOk = ctx.isDaily || istMinutes(candles[j].time) <= 14 * 60 + 45;
-      if (isNew && sameDay && timeOk) {
-        const levels = detectSupportResistance(ctx, j - 1);
-        const structure = detectMarketStructure(ctx, j - 1);
-        const volume = calculateVolumeStrength(ctx, j - 1);
+      if (isNew && sameDay && timeOk && (startTime == null || candles[j].time >= startTime)) {
         const entry = candles[j].open;
-        const sl = calculateStopLoss(ctx, j - 1, dir, levels, { entry, structure, volume });
-        const tg = calculateTargets(ctx, j - 1, dir, entry, sl.stopLoss, levels);
-        const okSide = dir === 'LONG' ? sl.stopLoss < entry && tg.target1 > entry : sl.stopLoss > entry && tg.target1 < entry;
-        if (okSide && sl.risk > 0) pos = { dir, entry, stop: sl.stopLoss, t1: tg.target1, risk: sl.risk, rr: tg.rr1, start: j, time: candles[j].time };
+        const snap = buildSnapshot(ctx, j - 1);
+        const scoring = calculateEntryScore(snap);
+        const historyContext = useHistoryConfidence ? getHistoryContext(aggregateDailyCandles(candles.slice(0, j))) : null;
+        if (!useHistoryConfidence || historyContext.available) {
+          const setup = buildTradeSetup(ctx, j - 1, snap, scoring, prev.stable, null, entry, historyContext);
+          const okSide = dir === 'LONG' ? setup.stopLoss < entry && setup.target1 > entry : setup.stopLoss > entry && setup.target1 < entry;
+          if (okSide && setup.risk > 0 && setup.confidence >= minConfidence) {
+            pos = {
+              symbol: ctx.symbol || null,
+              dir, entry, stop: setup.stopLoss, t1: setup.target1, t2: setup.target2,
+              risk: setup.risk, rr: setup.rr1, confidence: setup.confidence,
+              pattern: setup.candlePattern?.name || null,
+              start: j, time: candles[j].time,
+            };
+          }
+        }
       }
     }
     if (pos && j >= pos.start) {
@@ -347,8 +402,9 @@ export function runBacktest(ctx, timeline, cacheKey) {
     maxDrawdownPct: maxDd * 100,
     from: candles[0].time, to: candles[last].time, candlesTested: last + 1,
     message: trades.length === 0 ? 'No qualifying BUY/SELL signals occurred in the loaded history.' : trades.length < 20 ? `Small sample (${trades.length} trades) - treat these statistics as weak evidence.` : null,
-    assumptions: 'Entry at next bar open, stop-first on ambiguous bars, 1% equity risked per trade, no brokerage/slippage/taxes.',
+    assumptions: `Entry at next bar open; ${useHistoryConfidence ? `confidence >= ${minConfidence}% using historical daily context; ` : ''}stop-first on ambiguous bars; 1% equity risked per trade; no brokerage/slippage/taxes.`,
   };
+  if (includeTrades) result.trades = trades;
   backtestCache.set(ck, result);
   if (backtestCache.size > 30) backtestCache.delete(backtestCache.keys().next().value);
   return result;

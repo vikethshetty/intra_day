@@ -33,6 +33,8 @@ export default function CallCard({ call, asOf, price, onTrack, canTrack, trackin
       {live && call.reasonsFor.length > 0 && (
         <div className="call-why"><b>Why:</b> {call.reasonsFor.join(' · ')}</div>
       )}
+      {p.historyContext && <div className="call-why">One-month trend: {p.historyContext.trend.toLowerCase()} · {p.historyContext.candleCount} daily candles</div>}
+      {p.candlePattern && <div className="call-why">Pattern-based plan: {p.candlePattern.name}</div>}
 
       <div className="call-actions">
         {canTrack && !tracking && <button type="button" className="btn-primary-x" onClick={onTrack}><i className="bi bi-bullseye" /> {live ? 'Track this trade' : 'Track this plan'}</button>}

@@ -31,6 +31,7 @@ export function buildIntradayCall({ snap, scoring, setup, stable, marketStatus, 
   const plan = {
     direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, target1: setup.target1, target2: setup.target2,
     risk: setup.risk, rr1: setup.rr1, rr2: setup.rr2, confidence: setup.confidence, strength: setup.signalStrength,
+    historyContext: setup.historyContext, candlePattern: setup.candlePattern,
   };
   const reasons = (setup.checks || []).filter((c) => c.ok).map((c) => c.label).slice(0, 5);
   const blockers = [];

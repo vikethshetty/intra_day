@@ -10,11 +10,14 @@ Stack: React + Vite + Bootstrap 5 + Bootstrap Icons + TradingView Lightweight Ch
 
 ---
 
-## Two views (tabs)
+## Views (tabs)
 
 * **Intraday today** (default) - one trading session only. A big, plain call at the top:
   **YES - BUY NOW**, **SELL NOW**, or **WAIT** (with the reason), plus where to enter, the stop-loss, Target 1 and Target 2.
   Press **Track this trade** and the *My trade tracker* box tells you live: *hold*, *Target 1 hit - book half and move the stop to entry*, *Target 2 hit - book full profit*, or *Stop loss hit - exit now*. A browser notification (bell icon) can announce a new BUY NOW / SELL NOW call.
+* **Daily Top 10** - ranks the highest-confidence setups from NSE mainboard and SME equities.
+* **Nifty 50 Analysis** - separately scans the current 50 Nifty constituents, ranks their Top 10 setups, and includes a confidence-based historical backtest for 1 week, 2 weeks, 3 weeks, 1 month or 2 months.
+* **Daily Top 10 backtesting** - backtests the ten shares in the current full-market Daily Top 10 ranking over the same date ranges.
 * **Full analysis** - all timeframes, indicators, scenarios, backtest and the stop-loss analyzer.
 
 How the intraday call is decided (`backend/services/intradayService.js`): a BUY/SELL **NOW** needs a stable BUY/SELL signal (not WEAK), setup conditions met (not waiting for a breakout close, not stretched far from EMA 20), no false-breakout warning, and reward at least 1.2x risk. Time rules: no calls before 9:30 AM (opening volatility), no new entries after 2:45 PM, "square off now" after 3:15 PM, and nothing at all when the market is closed or the feed is stale. These are technical signals, not guarantees.
@@ -35,22 +38,22 @@ npm install
 
 ## Configuration
 
-Create `backend/.env` (copy `backend/.env.example`), then add your Upstox Analytics Token:
+Edit the existing ignored `backend/.env` for local settings. Keep it out of Git. Use Yahoo as the default analysis/backtest source and set your Upstox token for live trade tracking:
 
 ```
 PORT=5000
 FRONTEND_URL=http://localhost:5173
-MARKET_DATA_PROVIDER=upstox
-UPSTOX_ACCESS_TOKEN=your_upstox_analytics_token
+MARKET_DATA_PROVIDER=yahoo
+UPSTOX_ACCESS_TOKEN=your_upstox_access_token
 ```
 
 | Variable | Meaning |
 |---|---|
 | `PORT` | Backend port (default 5000) |
 | `FRONTEND_URL` | Allowed browser origin (localhost on any port is always allowed) |
-| `MARKET_DATA_PROVIDER` | `upstox`, `yahoo`, or `twelvedata`. Choose `upstox` to use Upstox data. |
-| `UPSTOX_ACCESS_TOKEN` | Your Upstox Analytics Token. Keep it secret; it is read-only and expires after one year. |
-| `MARKET_DATA_API_KEY` | Existing Twelve Data key variable. Upstox also accepts this as a fallback, but `UPSTOX_ACCESS_TOKEN` is preferred. |
+| `MARKET_DATA_PROVIDER` | Defaults provider-backed analysis routes to `yahoo`; the app explicitly uses Yahoo for analysis/scanning and Upstox for tracked-trade monitoring. |
+| `UPSTOX_ACCESS_TOKEN` | Your Upstox access token. Keep it secret; Upstox tokens expire at 3:30 AM the following day, so refresh it when required. |
+| `MARKET_DATA_API_KEY` | Optional Twelve Data key. It is not used as an Upstox token. |
 
 If the provider is unknown (for example the placeholder `YOUR_PROVIDER`) or a required key is missing, the backend still starts and the dashboard shows a clear *"Market-data provider needs configuration"* message instead of crashing.
 
@@ -84,18 +87,18 @@ Optional: `npm run build` in `frontend/` produces a static build; `npm test` in 
 
 Everything that talks to a data vendor lives in **`backend/services/marketDataService.js`**. Each provider is a small object with `fetchCandles()` returning `{ candles: [{time, open, high, low, close, volume}], meta }`; the rest of the app only sees that normalised shape.
 
-* **`upstox`** - Upstox's documented V3 historical and current-session candle APIs, plus its instrument search endpoint. Set `MARKET_DATA_PROVIDER=upstox` and `UPSTOX_ACCESS_TOKEN`. Upstox's Analytics Token is free and read-only. The app polls candle endpoints; it does not yet connect to Upstox's WebSocket feed, so this is not tick-by-tick streaming.
-* **`yahoo` (default if no provider is configured)** - Yahoo Finance's public chart endpoint: OHLCV, timestamps, 1-minute candles for NSE (`.NS`) with a BSE (`.BO`) fallback. No key. It is an *unofficial* endpoint intended for personal use: it may be delayed, rate-limited, or change without notice. Respect Yahoo's terms; do not use it commercially.
+* **`upstox`** - Used by the active trade tracker for current-session candles. It requires `UPSTOX_ACCESS_TOKEN`. The tracker polls REST candles while a trade is being tracked during NSE market hours; it does not yet connect to the Upstox WebSocket feed.
+* **`yahoo`** - Used for analysis, charts, broad-market Top 10 scanning, and backtesting. It reads Yahoo Finance's public chart endpoint, which may be delayed, rate-limited, or change without notice.
 * **`twelvedata`** - adapter included; requires your own API key and a plan that covers NSE. It was written to the vendor's documented format but has not been run against a live key here.
 * **Google Finance** - **not used.** It has no public real-time API and its terms/anti-bot protections do not permit scraping, and this project deliberately does not try to bypass them.
-* **Provider selection:** add the chosen provider id and its required secret in `backend/.env`. In Vercel, configure the same variables under the backend service's Environment Variables and redeploy. Local `.env` files are ignored by Git, so changing one does not update Vercel.
+* **Provider selection:** provider choice is made by task in the app. The local default remains Yahoo; Upstox is called only for tracked-trade monitoring. In Vercel, add `UPSTOX_ACCESS_TOKEN` to the backend service's Environment Variables and redeploy. Local `.env` files are ignored by Git, so changing one does not update Vercel.
 
 ## How live candles work
 
-1. On load (and when you change stock/timeframe) the frontend requests the full history once: `GET /api/analysis/:symbol?interval=1m`.
+1. On load (and when you change stock/timeframe) the frontend requests Yahoo history and analysis: `GET /api/analysis/:symbol?interval=1m`.
 2. After that it **polls** a small "tail" (the last ~6 candles and indicator points): every ~4 s for 1m-5m, 10-15 s for higher timeframes, ~45 s when the market is closed or the tab is hidden. The backend caches provider responses for a few seconds so many polls never hammer the vendor.
 3. The tail is merged into the in-memory series and only the **latest candle is updated** on the chart (`series.update`) - no page reload, no full redraw. If a gap is detected (e.g. the laptop slept) it reloads the history.
-4. This app uses controlled polling of candle endpoints. With Upstox, the current-session candle endpoint supplies refreshed candles, but the app does not yet use the Upstox WebSocket feed; updates are near-live and not tick-by-tick.
+4. Backtest results use the Yahoo candles already loaded for the analysis. When the user starts tracking a trade, a separate Upstox endpoint polls current-session candles every five seconds while NSE is open. Upstox is not used to calculate the Yahoo-based signal or its entry/target levels.
 5. 3-minute candles are aggregated from real 1-minute candles (anchored to 09:15 IST). Times are shown in IST. Session VWAP resets each IST trading day.
 6. Market hours (IST): pre-open 09:00-09:15, open 09:15-15:30, after-market afterwards; weekends are closed. The exchange holiday calendar is not available offline, so if no fresh candle arrives for 5 minutes during "open" hours the UI says the feed looks stale (possible holiday/delay) rather than pretending it is live. When closed, the last available candle is shown.
 
@@ -108,7 +111,7 @@ It calls `POST /api/analysis/:symbol/stoploss` (direction `AUTO`, `LONG` or `SHO
 3. adds a **volatility buffer** (0.30 ATR, more when ATR% is high or volume is thin);
 4. keeps total risk between 0.8 and 3 ATR and rounds to the NSE 0.05 tick;
 5. sets **Target 1** at the nearest level between 1R and 2.2R (otherwise 1.5R) and **Target 2** at the next level (otherwise 2.5R), placed just before the level;
-6. reports entry, stop, risk, targets, risk/reward, a capped (<= 90%) confidence, and a plain-language "why this stop" list.
+6. reports entry, stop, risk, targets, risk/reward, and a capped (<= 90%) confidence. Confidence includes the one-month daily trend; intraday candlestick patterns can set a breakout confirmation and measured-move targets.
 
 The levels are then drawn on the chart as ENTRY, STOP LOSS, TARGET 1/2 (plus support, resistance and VWAP) and watched live: reaching entry / stop / target raises an alert. If there is no active signal the result is labelled **conditional** and tells you what confirmation to wait for.
 
@@ -126,6 +129,9 @@ The levels are then drawn on the chart as ENTRY, STOP LOSS, TARGET 1/2 (plus sup
 | GET | `/api/health` | provider configuration status |
 | GET | `/api/search?q=` | symbol suggestions |
 | GET | `/api/scanner/top10?offset=0` | one batch from the NSE equity scan; the browser advances `offset` until `done: true` |
+| GET | `/api/scanner/nifty50/top10?offset=0` | one batch from the current official Nifty 50 constituents; the browser advances `offset` until `done: true` |
+| GET | `/api/scanner/nifty50/backtest?offset=0&periodDays=7&endTime=...` | one batch of Nifty 50 confidence-based historical simulations |
+| GET | `/api/scanner/top10/backtest?symbols=...&offset=0&periodDays=7&endTime=...` | one batch of historical simulations for the current Daily Top 10 shares |
 | GET | `/api/market/:symbol` | overview + quote + market status |
 | GET | `/api/market/:symbol/candles?interval=1m` | `1m 3m 5m 15m 30m 1H 1D` |
 | GET | `/api/market/:symbol/quote` | price, change, day high/low, volume |
@@ -155,7 +161,9 @@ live-trading-analyzer/
 ## Limitations
 
 * Data availability and update timing depend on the selected provider. Upstox's REST candles are polled rather than streamed here; the Upstox WebSocket feed is not integrated yet.
-* Daily Top 10 processes the current NSE mainboard and SME equity lists in small batches using the selected provider's 5-minute candles. It ranks all symbols for which the provider returns enough candles; unavailable or incomplete symbols are counted as skipped. The browser saves progress locally and resumes an interrupted scan. A provider timeout or rate limit pauses the scan instead of silently producing a partial top ten.
+* Daily Top 10 processes the current NSE mainboard and SME equity lists in small batches using Yahoo's 5-minute candles. It requires at least 25 calendar days of history, includes the one-month daily trend in confidence, and skips symbols without that history. Recent intraday candle patterns can shape entry confirmation and measured-move targets. The browser saves progress locally and resumes an interrupted scan.
+* Nifty 50 Analysis is a separate scan using the current constituent CSV published by NSE Indices. It has its own ranking and saved scan progress, independent of the full-market Daily Top 10.
+* The Nifty 50 and Daily Top 10 backtests use hourly Yahoo candles for the selected 1-week to 2-month period. They replay stable BUY/SELL calls that pass a 70% confidence floor and report trade counts, win rate, planned risk/reward, and realized R multiples. They do not assume account capital, position sizes, or rupee profit. Trades across symbols are combined for analysis, not modelled as one account. Results exclude brokerage, taxes and slippage; current list membership is applied retrospectively.
 * Technical indicators describe the past; patterns fail often. Backtests ignore costs, slippage and gaps, and a high historical win rate does not predict future results.
 * Probabilities are tendencies over roughly the next 10 candles, never a price target and never a time.
 * Exchange holidays, circuit limits, corporate actions, news and fundamentals are not modelled.

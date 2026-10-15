@@ -9,7 +9,8 @@ import {
 } from '../services/signalEngine.js';
 import { generateScenarioAnalysis } from '../services/predictionEngine.js';
 import { buildIntradayCall } from '../services/intradayService.js';
-import { getDailyTop10Batch } from '../services/dailyScannerService.js';
+import { getDailyTop10Batch, getNifty50Top10Batch, getNifty50BacktestBatch, getDailyTop10BacktestBatch } from '../services/dailyScannerService.js';
+import { getHistoryContext } from '../services/historyContextService.js';
 
 const DISCLAIMER = 'Technical-analysis estimates for personal study only. Not financial advice. Probabilities are not guarantees; markets can move against any setup. This app never places trades.';
 const TAIL = 6;
@@ -24,7 +25,8 @@ const wrap = (fn) => async (req, res) => {
     const e = err instanceof MarketDataError ? err : new MarketDataError('INTERNAL', 'Unexpected analysis error. Check the backend console.', 500);
     if (!(err instanceof MarketDataError)) console.error(err);
     if (e.retryAfter) res.set('Retry-After', String(e.retryAfter));
-    res.status(e.status || 500).json({ ok: false, error: { code: e.code, message: e.message, retryAfter: e.retryAfter ?? null }, provider: getProviderStatus() });
+    const providerId = req.path.startsWith('/tracking/') ? 'upstox' : 'yahoo';
+    res.status(e.status || 500).json({ ok: false, error: { code: e.code, message: e.message, retryAfter: e.retryAfter ?? null }, provider: getProviderStatus(providerId) });
   }
 };
 
@@ -68,7 +70,7 @@ const slimLevels = (levels, n = 3) => ({
 /* ------------------------------------------------------------------ */
 const analysisCache = new WeakMap();
 
-function analyze(data) {
+function analyze(data, historyContext) {
   const hit = analysisCache.get(data);
   if (hit) return hit;
   const ctx = buildContext(data.candles, data.interval);
@@ -81,7 +83,7 @@ function analyze(data) {
   const stable = entry.stable;
   const stableSide = sideOf(stable);
   const view = stableSide ? (stableSide === 'LONG' ? scoring.long : scoring.short) : scoring;
-  const setup = buildTradeSetup(ctx, i, snap, scoring, stable);
+  const setup = buildTradeSetup(ctx, i, snap, scoring, stable, null, null, historyContext);
   const prediction = generateScenarioAnalysis(ctx, snap, scoring, timeline);
   const backtest = runBacktest(ctx, timeline, key);
   const history = signalHistory(timeline);
@@ -102,6 +104,7 @@ function analyze(data) {
       indicators: { rows: describeIndicators(snap), values: snap.v },
       candlePatterns: snap.patterns,
       structure: snap.structure,
+      historyContext,
       levels: slimLevels(snap.levels),
       volume: snap.volume,
       vwap: snap.vwap,
@@ -140,13 +143,20 @@ function analyze(data) {
 
 async function loadAnalysis(req, { allowBodyInterval = false } = {}) {
   const interval = normalizeInterval((allowBodyInterval ? req.body?.interval : null) ?? req.query.interval ?? '1m');
-  const data = await getCandles(req.params.symbol, interval);
-  return { data, a: analyze(data), interval };
+  const [data, history] = await Promise.all([
+    getCandles(req.params.symbol, interval, 'yahoo'),
+    interval === '1D' ? Promise.resolve(null) : getCandles(req.params.symbol, '1D', 'yahoo'),
+  ]);
+  const historyContext = getHistoryContext(history?.candles || data.candles);
+  if (!historyContext.available) {
+    throw new MarketDataError('INSUFFICIENT_HISTORY', 'At least one month of daily history is required before calculating confidence for this share.', 422);
+  }
+  return { data, historyContext, a: analyze(data, historyContext), interval };
 }
 
 async function quoteFor(symbol, data) {
   try {
-    const q = await getQuote(symbol);
+    const q = await getQuote(symbol, data.providerId);
     return q.quote;
   } catch {
     return buildQuote(data.candles, data.meta); // fall back to the candles already loaded
@@ -163,11 +173,11 @@ const header = (data) => ({
 /* Handlers                                                            */
 /* ------------------------------------------------------------------ */
 export const health = (req, res) => {
-  res.json({ ok: true, time: Date.now(), provider: getProviderStatus(), intervals: Object.keys(INTERVALS) });
+  res.json({ ok: true, time: Date.now(), provider: getProviderStatus('yahoo'), providers: { yahoo: getProviderStatus('yahoo'), upstox: getProviderStatus('upstox') }, intervals: Object.keys(INTERVALS) });
 };
 
 export const search = wrap(async (req, res) => {
-  const out = await searchSymbols(String(req.query.q || ''));
+  const out = await searchSymbols(String(req.query.q || ''), 'yahoo');
   res.json({ ok: true, ...out });
 });
 
@@ -175,21 +185,53 @@ export const dailyTop10 = wrap(async (req, res) => {
   res.json(await getDailyTop10Batch(req.query.offset));
 });
 
+export const nifty50Top10 = wrap(async (req, res) => {
+  res.json(await getNifty50Top10Batch(req.query.offset));
+});
+
+export const nifty50Backtest = wrap(async (req, res) => {
+  res.json(await getNifty50BacktestBatch({
+    offset: req.query.offset,
+    periodDays: req.query.periodDays,
+    endTime: req.query.endTime,
+  }));
+});
+
+export const dailyTop10Backtest = wrap(async (req, res) => {
+  const symbols = String(req.query.symbols || '').split(',').filter(Boolean);
+  res.json(await getDailyTop10BacktestBatch({
+    symbols,
+    offset: req.query.offset,
+    periodDays: req.query.periodDays,
+    endTime: req.query.endTime,
+  }));
+});
+
 export const marketOverview = wrap(async (req, res) => {
-  const { quote, data } = await getQuote(req.params.symbol);
-  res.json({ ok: true, ...header(data), interval: '1m', quote, marketStatus: getMarketStatus(Date.now(), quote.lastCandleTime), provider: getProviderStatus() });
+  const { quote, data } = await getQuote(req.params.symbol, 'yahoo');
+  res.json({ ok: true, ...header(data), interval: '1m', quote, marketStatus: getMarketStatus(Date.now(), quote.lastCandleTime), provider: getProviderStatus('yahoo') });
 });
 
 export const marketQuote = wrap(async (req, res) => {
-  const { quote, data } = await getQuote(req.params.symbol);
+  const { quote, data } = await getQuote(req.params.symbol, 'yahoo');
   res.json({ ok: true, ...header(data), interval: '1m', quote, marketStatus: getMarketStatus(Date.now(), quote.lastCandleTime) });
 });
 
 export const marketCandles = wrap(async (req, res) => {
   const interval = normalizeInterval(req.query.interval || '1m');
-  const data = await getCandles(req.params.symbol, interval);
+  const data = await getCandles(req.params.symbol, interval, 'yahoo');
   const limit = Math.min(Number(req.query.limit) || data.candles.length, data.candles.length);
   res.json({ ok: true, ...header(data), count: limit, candles: data.candles.slice(-limit) });
+});
+
+/** Upstox is fetched only by the active trade tracker; analysis data remains Yahoo-based. */
+export const trackingMarket = wrap(async (req, res) => {
+  const interval = normalizeInterval(req.query.interval || '1m');
+  const data = await getCandles(req.params.symbol, interval, 'upstox');
+  const quote = buildQuote(data.candles, data.meta);
+  const dayStart = Math.floor((quote.lastCandleTime + 19800) / 86400) * 86400 - 19800;
+  const candles = data.candles.filter((c) => c.time >= dayStart);
+  res.json({ ok: true, ...header(data), quote, marketStatus: getMarketStatus(Date.now(), quote.lastCandleTime), count: candles.length, candles, provider: getProviderStatus('upstox') });
 });
 
 export const analysisFull = wrap(async (req, res) => {
@@ -205,7 +247,7 @@ export const analysisFull = wrap(async (req, res) => {
     quote, marketStatus,
     candles, series: buildSeries(a.ctx, mode),
     analysis: { ...a.payload, intraday },
-    provider: getProviderStatus(),
+    provider: getProviderStatus('yahoo'),
   });
 });
 
@@ -226,14 +268,14 @@ export const analysisSignals = wrap(async (req, res) => {
 });
 
 export const analysisStopLoss = wrap(async (req, res) => {
-  const { data, a, interval } = await loadAnalysis(req, { allowBodyInterval: true });
+  const { data, historyContext, a, interval } = await loadAnalysis(req, { allowBodyInterval: true });
   const want = String(req.body?.direction || 'AUTO').toUpperCase();
   if (!['AUTO', 'LONG', 'SHORT'].includes(want)) throw new MarketDataError('BAD_REQUEST', 'direction must be AUTO, LONG or SHORT.', 400);
   const entryOverride = req.body?.entry != null && Number.isFinite(Number(req.body.entry)) ? Number(req.body.entry) : null;
   const { ctx, snap, scoring, stable, stableSide } = a;
   const i = ctx.candles.length - 1;
   const manual = want !== 'AUTO';
-  const setup = buildTradeSetup(ctx, i, snap, scoring, stable, manual ? want : null, entryOverride);
+  const setup = buildTradeSetup(ctx, i, snap, scoring, stable, manual ? want : null, entryOverride, historyContext);
   const warnings = [];
   if (!setup.active && !manual) warnings.push('There is no active BUY/SELL signal. These levels are a conditional plan - do not enter until the confirmation listed in Trade Setup happens.');
   if (manual && stableSide && stableSide !== want) warnings.push(`You chose ${want} but the current signal leans ${stableSide}. This trade is against the prevailing bias.`);

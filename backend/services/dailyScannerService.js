@@ -102,7 +102,7 @@ async function getNseUniverse() {
   }
 }
 
-async function getNifty50Universe() {
+export async function getNifty50Universe() {
   if (nifty50UniverseCache && Date.now() - nifty50UniverseCache.loadedAt < UNIVERSE_TTL_MS) return nifty50UniverseCache.stocks;
   try {
     const stocks = parseNifty50Csv(await downloadCsv(NIFTY50_CONSTITUENTS_URL, NIFTY50_REFERER));

@@ -10,6 +10,7 @@ import {
 import { generateScenarioAnalysis } from '../services/predictionEngine.js';
 import { buildIntradayCall } from '../services/intradayService.js';
 import { getDailyTop10Batch, getNifty50Top10Batch, getNifty50BacktestBatch, getDailyTop10BacktestBatch } from '../services/dailyScannerService.js';
+import { getStrategyBacktestBatch } from '../services/strategyBacktestService.js';
 import { getHistoryContext } from '../services/historyContextService.js';
 
 const DISCLAIMER = 'Technical-analysis estimates for personal study only. Not financial advice. Probabilities are not guarantees; markets can move against any setup. This app never places trades.';
@@ -208,6 +209,22 @@ export const dailyTop10Backtest = wrap(async (req, res) => {
     endDate: req.query.endDate,
     minConfidence: req.query.minConfidence,
     maxConfidence: req.query.maxConfidence,
+  }));
+});
+
+export const strategyBacktest = wrap(async (req, res) => {
+  const symbols = String(req.query.symbols || '').split(',').filter(Boolean);
+  res.json(await getStrategyBacktestBatch({
+    strategyId: req.query.strategyId,
+    universe: req.query.universe,
+    symbols,
+    offset: req.query.offset,
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+    confidenceMode: req.query.confidenceMode,
+    confidenceLow: req.query.confidenceLow,
+    confidenceHigh: req.query.confidenceHigh,
+    costBpsPerSide: req.query.costBpsPerSide,
   }));
 });
 

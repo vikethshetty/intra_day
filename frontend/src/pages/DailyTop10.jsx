@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchDailyTop10Batch, fetchNifty50Top10Batch, fetchHealth, normalizeError } from '../services/api.js';
 import Nifty50Backtest from './Nifty50Backtest.jsx';
+import NewStrategyBacktest from './NewStrategyBacktest.jsx';
 
 const inr = (value) => Number.isFinite(value)
   ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(value)
@@ -120,8 +121,9 @@ export default function DailyTop10({ onAnalyze, universe = 'nse' }) {
     {!nifty50 && <nav className="nifty-subnav" aria-label="Daily Top 10 sections">
       <button type="button" className={view === 'analysis' ? 'on' : ''} onClick={() => setView('analysis')}>Top 10 analysis</button>
       <button type="button" className={view === 'backtest' ? 'on' : ''} onClick={() => setView('backtest')} disabled={!data?.complete || loading} title={!data?.complete ? 'Complete the Daily Top 10 scan first' : undefined}>Backtesting</button>
+      <button type="button" className={view === 'newStrategy' ? 'on' : ''} onClick={() => setView('newStrategy')} disabled={!data?.complete || loading} title={!data?.complete ? 'Complete the Daily Top 10 scan first' : undefined}>New Strategy</button>
     </nav>}
-    {!nifty50 && view === 'backtest' ? <Nifty50Backtest universe="dailyTop10" symbols={data?.results?.map((stock) => stock.symbol) || []} /> : (
+    {!nifty50 && view === 'newStrategy' ? <NewStrategyBacktest universe="dailyTop10" symbols={data?.results?.map((stock) => stock.symbol) || []} /> : !nifty50 && view === 'backtest' ? <Nifty50Backtest universe="dailyTop10" symbols={data?.results?.map((stock) => stock.symbol) || []} /> : (
     <main className="app-shell daily-shell">
       <header className="topbar glass daily-header">
         <div className="brand">

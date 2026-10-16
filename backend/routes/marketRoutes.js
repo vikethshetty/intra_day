@@ -9,6 +9,7 @@ router.get('/scanner/top10', c.dailyTop10);
 router.get('/scanner/nifty50/top10', c.nifty50Top10);
 router.get('/scanner/nifty50/backtest', c.nifty50Backtest);
 router.get('/scanner/top10/backtest', c.dailyTop10Backtest);
+router.get('/scanner/strategy-backtest', c.strategyBacktest);
 
 // Market data
 router.get('/market/:symbol', c.marketOverview);

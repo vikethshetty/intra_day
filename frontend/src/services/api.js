@@ -28,6 +28,8 @@ export const fetchNifty50BacktestBatch = (offset, filters) =>
   http.get('/scanner/nifty50/backtest', { params: { offset, ...filters }, timeout: 55000 }).then((r) => r.data);
 export const fetchDailyTop10BacktestBatch = (symbols, offset, filters) =>
   http.get('/scanner/top10/backtest', { params: { symbols: symbols.join(','), offset, ...filters }, timeout: 55000 }).then((r) => r.data);
+export const fetchStrategyBacktestBatch = (options) =>
+  http.get('/scanner/strategy-backtest', { params: options, timeout: 55000 }).then((r) => r.data);
 export const fetchTrackingData = (symbol, interval) =>
   http.get(`/tracking/${enc(symbol)}`, { params: { interval }, timeout: 15000 }).then((r) => r.data);
 export const fetchLiveMarket = (symbol, interval, series = 'full') =>

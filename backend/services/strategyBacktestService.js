@@ -1,11 +1,13 @@
 import { getNifty50Universe } from './dailyScannerService.js';
-import { getUpstoxHistoricalRange, getProviderStatus, MarketDataError } from './marketDataService.js';
+import { getYahooHistoricalRange, getProviderStatus, MarketDataError } from './marketDataService.js';
 import { generateStrategySignals, STRATEGIES } from './strategyFormulaEngine.js';
 import { IST_OFFSET, istDayKey, istMinutes } from '../utils/indicators.js';
 
 const BATCH_SIZE = 2;
 const CONCURRENCY = 2;
 const BATCH_CACHE_TTL = 5 * 60 * 1000;
+const YAHOO_15M_MAX_DAYS = 60;
+const YAHOO_15M_WARMUP_DAYS = 5;
 const batchCache = new Map();
 
 async function mapLimit(items, limit, fn) {
@@ -32,12 +34,6 @@ function parseIstDate(value, label) {
   return Math.floor(utc / 1000) - IST_OFFSET;
 }
 
-function addIsoDays(date, days) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
-
 function validateConfidence({ mode, low, high }) {
   const filter = { mode: String(mode || 'gt'), low: Number(low ?? 70), high: Number(high ?? 100) };
   if (!['gt', 'lt', 'between', 'exact'].includes(filter.mode)
@@ -59,7 +55,9 @@ function validateRequest(options) {
   if (startTime > endTime) throw new MarketDataError('BAD_REQUEST', 'The start date must be on or before the end date.', 400);
   const todayIst = Math.floor((Date.now() / 1000 + IST_OFFSET) / 86400) * 86400 - IST_OFFSET;
   if (endTime >= todayIst + 86400) throw new MarketDataError('BAD_REQUEST', 'The end date cannot be in the future.', 400);
-  if (startTime < todayIst - 365 * 86400) throw new MarketDataError('BAD_REQUEST', 'Choose a start date within the last year.', 400);
+  if (startTime < todayIst - (YAHOO_15M_MAX_DAYS - YAHOO_15M_WARMUP_DAYS) * 86400) {
+    throw new MarketDataError('BAD_REQUEST', 'Yahoo Finance 15-minute history is limited to roughly the latest 60 days. Choose a start date within the latest 55 days.', 400);
+  }
   const confidence = validateConfidence({ mode: options.confidenceMode, low: options.confidenceLow, high: options.confidenceHigh });
   const costBpsPerSide = Number(options.costBpsPerSide ?? 0);
   if (!Number.isFinite(costBpsPerSide) || costBpsPerSide < 0 || costBpsPerSide > 1000) {
@@ -147,11 +145,15 @@ function executeCandidates(candles, signals, costBpsPerSide) {
 
 async function backtestOne(stock, request) {
   try {
-    // 60 calendar days seed EMA200 and intraday indicators before the selected start date.
-    const historyStartDate = addIsoDays(request.startDate, -60);
+    // Yahoo intraday bars cover roughly 60 days. Reserve up to five days to warm
+    // 15m indicators; hourly history gets a longer seed for EMA200.
+    const todayIst = Math.floor((Date.now() / 1000 + IST_OFFSET) / 86400) * 86400 - IST_OFFSET;
+    const historyStart15m = Math.max(request.startTime - YAHOO_15M_WARMUP_DAYS * 86400, todayIst - (YAHOO_15M_MAX_DAYS - 1) * 86400);
+    const historyStart1h = request.startTime - 60 * 86400;
+    const historyEnd = request.endTime + 1;
     const [data15m, data1h] = await Promise.all([
-      getUpstoxHistoricalRange(stock.symbol, '15m', historyStartDate, request.endDate),
-      getUpstoxHistoricalRange(stock.symbol, '1H', historyStartDate, request.endDate),
+      getYahooHistoricalRange(stock.symbol, '15m', historyStart15m, historyEnd),
+      getYahooHistoricalRange(stock.symbol, '1H', historyStart1h, historyEnd),
     ]);
     const signals = generateStrategySignals({
       strategyId: request.strategyId,
@@ -165,8 +167,8 @@ async function backtestOne(stock, request) {
     return {
       symbol: stock.symbol,
       name: data15m.meta?.name || stock.name || stock.symbol,
-      sufficient: data15m.candles.length >= 200 && data1h.candles.length >= 200,
-      message: data15m.candles.length < 200 || data1h.candles.length < 200 ? 'Not enough 15-minute/hourly history to initialize strategy indicators.' : null,
+      sufficient: data15m.candles.length >= 40 && data1h.candles.length >= 200,
+      message: data15m.candles.length < 40 || data1h.candles.length < 200 ? 'Not enough 15-minute/hourly history to initialize strategy indicators.' : null,
       candleCount15m: data15m.candles.length,
       candleCount1h: data1h.candles.length,
       signalsCount: signals.length,
@@ -181,8 +183,7 @@ async function backtestOne(stock, request) {
 }
 
 export async function getStrategyBacktestBatch(options = {}) {
-  const provider = getProviderStatus('upstox');
-  if (!provider.configured) throw new MarketDataError('MISSING_API_KEY', provider.message, 503);
+  const provider = getProviderStatus('yahoo');
   const request = validateRequest(options);
   let stocks;
   if (options.universe === 'nifty50') stocks = await getNifty50Universe();

@@ -117,6 +117,50 @@ const yahoo = {
     throw lastErr;
   },
 
+  async fetchHistoricalRange({ base, suffix, interval, fromTime, toTime }) {
+    const yahooInterval = interval === '15m' ? '15m' : interval === '1H' ? '60m' : null;
+    if (!yahooInterval) throw new MarketDataError('INVALID_INTERVAL', 'Strategy backtests use Yahoo 15-minute and 1-hour candles.', 400);
+    const attempts = suffix ? [suffix] : ['NS', 'BO'];
+    let lastErr;
+    for (const sfx of attempts) {
+      const yahooSymbol = `${base}.${sfx}`;
+      try {
+        const { data } = await axios.get(`${this.baseUrl()}/v8/finance/chart/${encodeURIComponent(yahooSymbol)}`, {
+          params: { period1: fromTime, period2: toTime, interval: yahooInterval, includePrePost: false },
+          headers: { 'User-Agent': UA, Accept: 'application/json' },
+          timeout: 15000,
+        });
+        const result = data?.chart?.result?.[0];
+        if (!result) {
+          const chartError = data?.chart?.error;
+          throw new MarketDataError(chartError?.code === 'Not Found' ? 'INVALID_SYMBOL' : 'API_FAILURE', chartError?.description || 'Yahoo Finance returned no historical result.', chartError?.code === 'Not Found' ? 404 : 502);
+        }
+        const timestamps = result.timestamp || [];
+        const quote = result.indicators?.quote?.[0] || {};
+        const candles = timestamps.flatMap((time, index) => {
+          const values = [quote.open?.[index], quote.high?.[index], quote.low?.[index], quote.close?.[index]];
+          return values.every((value) => value != null && Number.isFinite(value))
+            ? [{ time, open: values[0], high: values[1], low: values[2], close: values[3], volume: quote.volume?.[index] || 0 }]
+            : [];
+        }).filter((candle) => candle.time >= fromTime && candle.time < toTime);
+        const meta = result.meta || {};
+        return {
+          candles,
+          providerSymbol: yahooSymbol,
+          meta: {
+            name: meta.longName || meta.shortName || base,
+            currency: meta.currency || 'INR',
+            exchange: meta.exchangeName === 'NSI' ? 'NSE' : meta.exchangeName === 'BSE' ? 'BSE' : (meta.fullExchangeName || meta.exchangeName || sfx),
+          },
+        };
+      } catch (error) {
+        lastErr = mapHttpError(error, 'Yahoo Finance');
+        if (lastErr.code !== 'INVALID_SYMBOL') throw lastErr;
+      }
+    }
+    throw lastErr;
+  },
+
   async search(q) {
     try {
       const { data } = await axios.get(`${this.baseUrl().replace('query1', 'query2')}/v1/finance/search`, {
@@ -187,7 +231,7 @@ const UPSTOX_INTERVALS = {
 };
 const upstoxInstrumentCache = new Map();
 const upstoxInstrumentMasters = new Map();
-const upstoxHistoricalRangeCache = new Map();
+const yahooHistoricalRangeCache = new Map();
 const UPSTOX_INSTRUMENT_TTL_MS = 6 * 60 * 60 * 1000;
 
 function upstoxToken() {
@@ -208,36 +252,6 @@ function asUpstoxCandle(row) {
   };
   return Number.isFinite(candle.time) && [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)
     ? candle : null;
-}
-
-function addIsoDays(date, days) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
-
-function splitDateRange(fromDate, toDate, maxDays) {
-  const ranges = [];
-  let from = fromDate;
-  while (from <= toDate) {
-    const proposedEnd = addIsoDays(from, maxDays - 1);
-    const to = proposedEnd < toDate ? proposedEnd : toDate;
-    ranges.push({ from, to });
-    from = addIsoDays(to, 1);
-  }
-  return ranges;
-}
-
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      out[index] = await fn(items[index], index);
-    }
-  }));
-  return out;
 }
 
 async function getUpstoxInstrumentMaster(exchange) {
@@ -354,29 +368,6 @@ const upstox = {
     };
   },
 
-  async fetchHistoricalRange({ base, suffix, interval, fromDate, toDate }) {
-    if (!['15m', '1H'].includes(interval)) throw new MarketDataError('INVALID_INTERVAL', 'Strategy backtests use 15-minute and 1-hour candles.', 400);
-    const instrument = await this.resolveInstrument(base, suffix);
-    const [unit, size] = UPSTOX_INTERVALS[interval];
-    // Upstox caps 1–15 minute history at about one month and hourly history at a quarter.
-    // Keep requests safely below those caps, then combine and de-duplicate their candles.
-    const ranges = splitDateRange(fromDate, toDate, interval === '15m' ? 28 : 89);
-    const pages = await mapLimit(ranges, 4, async ({ from, to }) => {
-      const path = `/v3/historical-candle/${encodeURIComponent(instrument.key)}/${unit}/${size}/${to}/${from}`;
-      const response = await this.request(path);
-      return response?.data?.candles || [];
-    });
-    const candles = [...new Map(pages.flat().map((row) => {
-      const candle = asUpstoxCandle(row);
-      return candle ? [candle.time, candle] : [null, null];
-    }).filter(([time]) => time != null)).values()].sort((a, b) => a.time - b.time);
-    return {
-      candles,
-      providerSymbol: instrument.key,
-      meta: { name: instrument.name || base, currency: 'INR', exchange: instrument.exchange },
-    };
-  },
-
   async search(q) {
     try {
       const query = q.trim().toUpperCase();
@@ -411,25 +402,25 @@ export function getProviderStatus(providerId = null) {
   return { configured: true, id, label: p.label, message: null };
 }
 
-/** Fetch chunked historical candles for the independent deterministic-strategy backtester. */
-export async function getUpstoxHistoricalRange(symbolInput, intervalInput, fromDate, toDate) {
+/** Fetch Yahoo historical candles for the independent deterministic-strategy backtester. */
+export async function getYahooHistoricalRange(symbolInput, intervalInput, fromTime, toTime) {
   const interval = String(intervalInput || '').trim();
   const sym = normalizeSymbol(symbolInput);
   if (!sym) throw new MarketDataError('INVALID_SYMBOL', 'Invalid NSE symbol.', 400);
-  if (!['15m', '1H'].includes(interval)) throw new MarketDataError('INVALID_INTERVAL', 'Strategy backtests use 15-minute and 1-hour candles.', 400);
-  const provider = activeProvider('upstox');
-  const cacheKey = `${sym.base}${sym.suffix || ''}|${interval}|${fromDate}|${toDate}`;
-  const cached = upstoxHistoricalRangeCache.get(cacheKey);
+  if (!['15m', '1H'].includes(interval)) throw new MarketDataError('INVALID_INTERVAL', 'Strategy backtests use Yahoo 15-minute and 1-hour candles.', 400);
+  const provider = yahoo;
+  const cacheKey = `${sym.base}${sym.suffix || ''}|${interval}|${fromTime}|${toTime}`;
+  const cached = yahooHistoricalRangeCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < 10 * 60 * 1000) return cached.data;
-  const raw = await provider.fetchHistoricalRange({ base: sym.base, suffix: sym.suffix, interval, fromDate, toDate });
+  const raw = await provider.fetchHistoricalRange({ base: sym.base, suffix: sym.suffix, interval, fromTime, toTime });
   const candles = raw.candles.filter((candle) => candle.time + (interval === '15m' ? 900 : 3600) <= Math.floor(Date.now() / 1000));
-  if (!candles.length) throw new MarketDataError('NO_DATA', `Upstox returned no completed ${interval} historical candles for ${sym.base}.`, 404);
+  if (!candles.length) throw new MarketDataError('NO_DATA', `Yahoo Finance returned no completed ${interval} historical candles for ${sym.base}. Yahoo intraday history is only available for a limited recent period.`, 404);
   const data = {
-    symbol: sym.base, interval, providerId: 'upstox', source: provider.label,
+    symbol: sym.base, interval, providerId: 'yahoo', source: provider.label,
     providerSymbol: raw.providerSymbol, meta: raw.meta, candles,
   };
-  upstoxHistoricalRangeCache.set(cacheKey, { cachedAt: Date.now(), data });
-  if (upstoxHistoricalRangeCache.size > 100) upstoxHistoricalRangeCache.delete(upstoxHistoricalRangeCache.keys().next().value);
+  yahooHistoricalRangeCache.set(cacheKey, { cachedAt: Date.now(), data });
+  if (yahooHistoricalRangeCache.size > 100) yahooHistoricalRangeCache.delete(yahooHistoricalRangeCache.keys().next().value);
   return data;
 }
 

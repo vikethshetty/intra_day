@@ -171,8 +171,8 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
       <section className="daily-intro glass backtest-controls strategy-controls">
         <label className="strategy-picker">Select strategy<select value={strategyId} onChange={(event) => { setStrategyId(event.target.value); clearPrevious(); }} disabled={loading}>{STRATEGIES.map(([id, text]) => <option key={id} value={id}>{text}</option>)}</select></label>
         <div className="backtest-date-controls">
-          <label>Start date<input type="date" value={startDate} min={addDays(today, -365)} max={endDate || today} onChange={(event) => changeStart(event.target.value)} disabled={loading} /></label>
-          <label>End date<input type="date" value={endDate} min={startDate || addDays(today, -365)} max={today} onChange={(event) => changeEnd(event.target.value)} disabled={loading} /></label>
+          <label>Start date<input type="date" value={startDate} min={addDays(today, -55)} max={endDate || today} onChange={(event) => changeStart(event.target.value)} disabled={loading} /></label>
+          <label>End date<input type="date" value={endDate} min={startDate || addDays(today, -55)} max={today} onChange={(event) => changeEnd(event.target.value)} disabled={loading} /></label>
         </div>
         <div className="backtest-confidence-controls">
           <label>Confidence filter<select value={confidenceMode} onChange={(event) => { setConfidenceMode(event.target.value); clearPrevious(); }} disabled={loading}>
@@ -182,7 +182,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
             : <label>Threshold (%)<input type="number" min="0" max="100" step="1" value={confidenceLow} onChange={(event) => { setConfidenceLow(event.target.value); clearPrevious(); }} disabled={loading} /></label>}
         </div>
         <label className="strategy-cost">Estimated transaction cost (bps per side)<input type="number" min="0" max="1000" step="0.1" value={costBpsPerSide} onChange={(event) => { setCostBpsPerSide(event.target.value); clearPrevious(); }} disabled={loading} /><small>Enter your estimated fees and slippage per order side. Default is 0 bps.</small></label>
-        <p className="backtest-control-hint">Uses completed 15-minute entry candles and the latest completed hourly trend. Upstox history is fetched in bounded date chunks; select dates within the latest year.</p>
+        <p className="backtest-control-hint">Historical analysis uses Yahoo Finance only: completed 15-minute entry candles and completed hourly trend. Yahoo limits intraday history to about 60 days, so the selected start date must be within the latest 55 days; hourly candles are also loaded to initialize the trend filter.</p>
       </section>
 
       <section className="daily-summary glass backtest-meta">

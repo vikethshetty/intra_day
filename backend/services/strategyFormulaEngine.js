@@ -25,7 +25,7 @@ function smaAt(values, i, period) {
   return sum / period;
 }
 
-function buildStrategyContext(candles, hourlyCandles) {
+function buildStrategyContext(candles, hourlyCandles, rewardRisk = 2) {
   const closes = candles.map((c) => c.close);
   const volumes = candles.map((c) => c.volume);
   const atr = ind.calculateATR(candles, 14);
@@ -50,6 +50,7 @@ function buildStrategyContext(candles, hourlyCandles) {
   return {
     candles,
     hourlyCandles,
+    rewardRisk,
     closes,
     volumes,
     ema20: ind.calculateEMA(closes, 20),
@@ -235,7 +236,8 @@ function signalFor(strategyId, i, ctx, hourlyIndex, priorSwing) {
   const risk = Math.abs(next.open - stop);
   const riskAtr = risk / currentAtr;
   if (!(risk > 0) || riskAtr < 0.25 || riskAtr > 3) return null;
-  const target = next.open + (direction === 'LONG' ? 2 : -2) * risk;
+  const rewardRisk = Number.isFinite(Number(ctx.rewardRisk)) ? Number(ctx.rewardRisk) : 2;
+  const target = next.open + (direction === 'LONG' ? rewardRisk : -rewardRisk) * risk;
   const confidence = Math.round((checks.filter(([, passed]) => passed).length / checks.length) * 100);
   const hourly = hourlyCandles[hourlyIndex];
   return {
@@ -249,11 +251,12 @@ function signalFor(strategyId, i, ctx, hourlyIndex, priorSwing) {
 }
 
 /** Return causal candidates filtered by the requested confidence rule. */
-export function generateStrategySignals({ strategyId, candles15m, candles1h, startTime, endTime, confidenceFilter }) {
+export function generateStrategySignals({ strategyId, candles15m, candles1h, startTime, endTime, confidenceFilter, rewardRisk = 2 }) {
+  if (![2, 2.5, 3].includes(Number(rewardRisk))) throw new Error('Reward-to-risk must be 2, 2.5, or 3.');
   if (!STRATEGIES.some((strategy) => strategy.id === strategyId)) throw new Error(`Unknown strategy: ${strategyId}`);
   const candles = candles15m.slice().sort((a, b) => a.time - b.time);
   const hourlyCandles = candles1h.slice().sort((a, b) => a.time - b.time);
-  const ctx = buildStrategyContext(candles, hourlyCandles);
+  const ctx = buildStrategyContext(candles, hourlyCandles, Number(rewardRisk));
   const signals = [];
   let hourCursor = -1;
   let highSwingCursor = 0, lowSwingCursor = 0;

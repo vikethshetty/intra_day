@@ -59,11 +59,13 @@ function validateRequest(options) {
     throw new MarketDataError('BAD_REQUEST', 'Yahoo Finance 15-minute history is limited to roughly the latest 60 days. Choose a start date within the latest 55 days.', 400);
   }
   const confidence = validateConfidence({ mode: options.confidenceMode, low: options.confidenceLow, high: options.confidenceHigh });
-  const costBpsPerSide = Number(options.costBpsPerSide ?? 0);
+  const rewardRisk = Number(options.rewardRisk ?? 2);
+  if (![2, 2.5, 3].includes(rewardRisk)) throw new MarketDataError('BAD_REQUEST', 'Reward-to-risk must be 2, 2.5, or 3.', 400);
+  const costBpsPerSide = Number(options.costBpsPerSide ?? 5);
   if (!Number.isFinite(costBpsPerSide) || costBpsPerSide < 0 || costBpsPerSide > 1000) {
     throw new MarketDataError('BAD_REQUEST', 'Estimated cost must be between 0 and 1000 basis points per side.', 400);
   }
-  return { strategyId, startDate, endDate, startTime, endTime, confidence, costBpsPerSide };
+  return { strategyId, startDate, endDate, startTime, endTime, confidence, costBpsPerSide, rewardRisk };
 }
 
 function executeCandidates(candles, signals, costBpsPerSide) {
@@ -162,8 +164,10 @@ async function backtestOne(stock, request) {
       startTime: request.startTime,
       endTime: request.endTime,
       confidenceFilter: request.confidence,
+      rewardRisk: request.rewardRisk,
     });
     const trades = executeCandidates(data15m.candles, signals, request.costBpsPerSide);
+    for (const trade of trades) trade.rewardRisk = request.rewardRisk;
     return {
       symbol: stock.symbol,
       name: data15m.meta?.name || stock.name || stock.symbol,
@@ -196,7 +200,7 @@ export async function getStrategyBacktestBatch(options = {}) {
   } else throw new MarketDataError('BAD_REQUEST', 'Choose Nifty 50 or Daily Top 10 as the backtest universe.', 400);
 
   const offset = Math.max(0, Math.min(Number.parseInt(options.offset, 10) || 0, stocks.length));
-  const batchKey = `${request.strategyId}|${options.universe}|${stocks.map((stock) => stock.symbol).join(',')}|${request.startDate}|${request.endDate}|${request.confidence.mode}|${request.confidence.low}|${request.confidence.high}|${request.costBpsPerSide}|${offset}`;
+  const batchKey = `${request.strategyId}|${options.universe}|${stocks.map((stock) => stock.symbol).join(',')}|${request.startDate}|${request.endDate}|${request.confidence.mode}|${request.confidence.low}|${request.confidence.high}|${request.costBpsPerSide}|${request.rewardRisk}|${offset}`;
   const cached = batchCache.get(batchKey);
   if (cached && Date.now() - cached.createdAt < BATCH_CACHE_TTL) return { ...cached.data, cached: true };
 
@@ -218,6 +222,7 @@ export async function getStrategyBacktestBatch(options = {}) {
     endTime: request.endTime,
     confidence: request.confidence,
     costBpsPerSide: request.costBpsPerSide,
+    rewardRisk: request.rewardRisk,
     offset,
     nextOffset,
     processedCount: batch.length,

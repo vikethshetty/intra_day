@@ -56,11 +56,11 @@ function csvCell(value) {
 }
 
 function exportCsv(data, stats, strategyLabel) {
-  const headers = ['Strategy', 'Symbol', 'Direction', 'Signal time (IST)', 'Entry time (IST)', 'Confidence %', 'Passed checks', 'Total checks', 'Entry', 'Stop', 'Target (2R)', 'Exit', 'Exit time (IST)', 'Outcome', 'Gross PnL/share', 'Estimated cost/share', 'Net PnL/share', 'Gross R', 'Net R', 'Cost bps each side'];
+  const headers = ['Strategy', 'Symbol', 'Direction', 'Signal time (IST)', 'Entry time (IST)', 'Confidence %', 'Passed checks', 'Total checks', 'Entry', 'Stop', `Target (1:${data.rewardRisk || 2})`, 'Exit', 'Exit time (IST)', 'Outcome', 'Gross PnL/share', 'Estimated cost/share', 'Net PnL/share', 'Gross R', 'Net R', 'Cost bps each side', 'Reward-to-risk'];
   const lines = [headers, ...stats.all.map((trade) => [
     strategyLabel, trade.symbol, trade.direction, dateTime(trade.signalTime), dateTime(trade.entryTime), trade.confidence,
     trade.passedChecks, trade.totalChecks, trade.entry, trade.stop, trade.target, trade.exit, dateTime(trade.exitTime), trade.why,
-    trade.grossPnlPerShare, trade.costPerShare, trade.netPnlPerShare, trade.grossR, trade.netR, trade.costBpsPerSide,
+    trade.grossPnlPerShare, trade.costPerShare, trade.netPnlPerShare, trade.grossR, trade.netR, trade.costBpsPerSide, trade.rewardRisk,
   ])].map((row) => row.map(csvCell).join(',')).join('\r\n');
   const blob = new Blob([`\uFEFF${lines}`], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -80,7 +80,8 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
   const [confidenceMode, setConfidenceMode] = useState('gt');
   const [confidenceLow, setConfidenceLow] = useState(70);
   const [confidenceHigh, setConfidenceHigh] = useState(85);
-  const [costBpsPerSide, setCostBpsPerSide] = useState(0);
+  const [rewardRisk, setRewardRisk] = useState(2);
+  const [costBpsPerSide, setCostBpsPerSide] = useState(5);
   const [progress, setProgress] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -89,7 +90,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
   const progressRef = useRef(null);
   const universeCount = isDailyTop10 ? symbols.length : 50;
   const strategyLabel = STRATEGIES.find(([id]) => id === strategyId)?.[1] || strategyId;
-  const filterKey = `${strategyId}|${universe}|${[...symbols].sort().join(',')}|${startDate}|${endDate}|${confidenceMode}|${confidenceLow}|${confidenceHigh}|${costBpsPerSide}`;
+  const filterKey = `${strategyId}|${universe}|${[...symbols].sort().join(',')}|${startDate}|${endDate}|${confidenceMode}|${confidenceLow}|${confidenceHigh}|${costBpsPerSide}|${rewardRisk}`;
 
   const clearPrevious = () => {
     setData(null);
@@ -113,7 +114,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
     setLoading(true);
     setError(null);
     const symbolKey = [...symbols].sort().join(',');
-    const filters = { strategyId, universe, symbols: symbols.join(','), startDate, endDate, confidenceMode, confidenceLow, confidenceHigh, costBpsPerSide };
+    const filters = { strategyId, universe, symbols: symbols.join(','), startDate, endDate, confidenceMode, confidenceLow, confidenceHigh, costBpsPerSide, rewardRisk };
     let current = restart || !progressRef.current || progressRef.current.filterKey !== filterKey || progressRef.current.symbolKey !== symbolKey
       ? { filterKey, symbolKey, filters, offset: 0, results: [], universeCount }
       : progressRef.current;
@@ -133,6 +134,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
           interval: batch.interval,
           confidence: batch.confidence,
           costBpsPerSide: batch.costBpsPerSide,
+          rewardRisk: batch.rewardRisk,
           startTime: batch.startTime,
           endTime: batch.endTime,
           skippedCount: [...bySymbol.values()].filter((item) => !item.sufficient).length,
@@ -181,8 +183,9 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
           {confidenceMode === 'between' ? <div className="backtest-range-inputs"><label>From (%)<input type="number" min="0" max="100" step="1" value={confidenceLow} onChange={(event) => { setConfidenceLow(event.target.value); clearPrevious(); }} disabled={loading} /></label><span>to</span><label>To (%)<input type="number" min="0" max="100" step="1" value={confidenceHigh} onChange={(event) => { setConfidenceHigh(event.target.value); clearPrevious(); }} disabled={loading} /></label></div>
             : <label>Threshold (%)<input type="number" min="0" max="100" step="1" value={confidenceLow} onChange={(event) => { setConfidenceLow(event.target.value); clearPrevious(); }} disabled={loading} /></label>}
         </div>
-        <label className="strategy-cost">Estimated transaction cost (bps per side)<input type="number" min="0" max="1000" step="0.1" value={costBpsPerSide} onChange={(event) => { setCostBpsPerSide(event.target.value); clearPrevious(); }} disabled={loading} /><small>Enter your estimated fees and slippage per order side. Default is 0 bps.</small></label>
-        <p className="backtest-control-hint">Historical analysis uses Yahoo Finance only: completed 15-minute entry candles and completed hourly trend. Yahoo limits intraday history to about 60 days, so the selected start date must be within the latest 55 days; hourly candles are also loaded to initialize the trend filter.</p>
+        <label>Reward-to-risk target<select value={rewardRisk} onChange={(event) => { setRewardRisk(Number(event.target.value)); clearPrevious(); }} disabled={loading}><option value={2}>1:2</option><option value={2.5}>1:2.5</option><option value={3}>1:3</option></select><small>Replays the same signal and stop logic with the selected target. Compare across separate runs.</small></label>
+        <label className="strategy-cost">Estimated transaction cost (bps per side)<input type="number" min="0" max="1000" step="0.1" value={costBpsPerSide} onChange={(event) => { setCostBpsPerSide(event.target.value); clearPrevious(); }} disabled={loading} /><small>Generic cost-and-slippage estimate per side, not a live broker fee calculator. Default is 5 bps per side; replace it with a validated estimate.</small></label>
+        <p className="backtest-control-hint">Historical analysis uses Yahoo Finance only: completed 15-minute entry candles and completed hourly trend. Yahoo limits intraday history to about 60 days, so the selected start date must be within the latest 55 days; hourly candles are also loaded to initialize the trend filter. The drawdown figure is a sequential illustration, not a portfolio simulation; simultaneous positions and available capital are not modeled.</p>
       </section>
 
       <section className="daily-summary glass backtest-meta">
@@ -199,7 +202,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
       {data && <>
         <section className="daily-summary glass strategy-results-meta">
           <span>Historical feed <b>{data.provider} · 15m + 1H</b></span><span>Completed date range <b>{dateLabel(data.startDate || startDate)} – {dateLabel(data.endDate || endDate)}</b></span>
-          <span>Costs <b>{data.costBpsPerSide} bps per side</b></span>
+          <span>Target <b>1:{data.rewardRisk || rewardRisk}</b></span><span>Costs <b>{data.costBpsPerSide} bps per side</b></span>
           <button type="button" className="btn-soft" onClick={() => exportCsv(data, stats, strategyLabel)} disabled={!stats.all.length}><i className="bi bi-file-earmark-spreadsheet" /> Export Excel CSV</button>
         </section>
         <div className="daily-summary backtest-results">
@@ -210,7 +213,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
           <article className="glass"><small>Win rate</small><b>{stats.winRate == null ? '—' : `${stats.winRate.toFixed(1)}%`}</b></article>
           <article className="glass"><small>Gross realized result</small><b>{stats.closed.length ? `${stats.grossR.toFixed(2)}R` : '—'}</b></article>
           <article className="glass"><small>Net realized result</small><b className={stats.netR >= 0 ? 'up' : 'down'}>{stats.closed.length ? `${stats.netR.toFixed(2)}R` : '—'}</b></article>
-          <article className="glass"><small>1% risk-per-trade drawdown estimate</small><b>{stats.closed.length ? `${stats.maxDrawdownPct.toFixed(2)}%` : '—'}</b></article>
+          <article className="glass"><small>Illustrative sequential drawdown (1% risk)</small><b>{stats.closed.length ? `${stats.maxDrawdownPct.toFixed(2)}%` : '—'}</b></article>
           <article className="glass"><small>Open at selected-data end</small><b>{stats.open}</b></article>
         </div>
         {data.skippedCount > 0 && <p className="fine">{data.skippedCount} shares had insufficient historical candles and were excluded.</p>}
@@ -226,7 +229,7 @@ export default function NewStrategyBacktest({ universe = 'nifty50', symbols = []
         </section> : <div className="glass empty"><i className="bi bi-bar-chart-line" /><p>No signals met the selected strategy and confidence rule in this date range.</p></div>}
       </>}
 
-      <footer className="disclaimer daily-disclaimer"><i className="bi bi-shield-exclamation" /><p>These are deterministic test hypotheses, not proven profitable strategies. Confidence is the share of checklist rules passed; it is not a calibrated win probability. Signals use only completed 15-minute bars, a completed-hour trend filter, next-bar-open entries, 2R targets, ATR-buffered stops, and conservative stop-first handling if both stop and target are touched in one candle. Exits are forced by 15:15 IST. Cost estimates are user-entered; zero is assumed until changed. The result is a backtest, not a live order.</p></footer>
+      <footer className="disclaimer daily-disclaimer"><i className="bi bi-shield-exclamation" /><p>These are deterministic test hypotheses, not proven profitable strategies. Confidence is the share of checklist rules passed; it is not a calibrated win probability. Signals use only completed 15-minute bars, a completed-hour trend filter, next-bar-open entries, the selected 2R/2.5R/3R target, ATR-buffered stops, and conservative stop-first handling if both stop and target are touched in one candle. Exits are forced by 15:15 IST. Cost estimates are user-entered; the default is a generic 5 bps per side and must be calibrated to your broker and order sizes. The result is a backtest, not a live order.</p></footer>
     </main>
   );
 }

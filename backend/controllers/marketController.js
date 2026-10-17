@@ -225,6 +225,7 @@ export const strategyBacktest = wrap(async (req, res) => {
     confidenceLow: req.query.confidenceLow,
     confidenceHigh: req.query.confidenceHigh,
     costBpsPerSide: req.query.costBpsPerSide,
+    rewardRisk: req.query.rewardRisk,
   }));
 });
 
